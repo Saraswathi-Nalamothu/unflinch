@@ -54,7 +54,7 @@ export default function SetupPage({ navigate, onSignOut, user }) {
 
   return (
     <>
-      <NavBar onSignOut={onSignOut} userName={user?.phone} />
+      <NavBar onSignOut={onSignOut} userName={user?.email} />
       <main className="min-h-screen bg-obsidian px-4 py-8 md:px-8">
         <div className="max-w-xl mx-auto">
 

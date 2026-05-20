@@ -1,79 +1,90 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { api } from '../lib/api'
 import { NavBar, ScoreRing, Spinner, Toast } from '../components/UI'
-import { Download, LayoutDashboard, Sparkles } from 'lucide-react'
+import { Download, LayoutDashboard, Sparkles, Trophy, AlertCircle } from 'lucide-react'
+
+// ── Confetti (same as dashboard) ─────────────────────────────
+function Confetti({ active }) {
+  const canvasRef = useRef(null)
+  const animRef   = useRef(null)
+  useEffect(() => {
+    if (!active) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    canvas.width = window.innerWidth
+    canvas.height = window.innerHeight
+    const pieces = Array.from({ length: 140 }, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * -canvas.height,
+      w: 8 + Math.random() * 8, h: 4 + Math.random() * 4,
+      color: ['#FF4D1C','#FF8C42','#00E5A0','#4A9EFF','#8B5CF6'][Math.floor(Math.random()*5)],
+      rot: Math.random() * 360, vx: (Math.random()-0.5)*3,
+      vy: 2+Math.random()*4, vr: (Math.random()-0.5)*6,
+    }))
+    let frame = 0
+    const draw = () => {
+      ctx.clearRect(0,0,canvas.width,canvas.height)
+      pieces.forEach(p => {
+        p.x+=p.vx; p.y+=p.vy; p.rot+=p.vr
+        ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.rot*Math.PI/180)
+        ctx.fillStyle=p.color; ctx.fillRect(-p.w/2,-p.h/2,p.w,p.h); ctx.restore()
+      })
+      frame++
+      if (frame < 220) animRef.current = requestAnimationFrame(draw)
+      else ctx.clearRect(0,0,canvas.width,canvas.height)
+    }
+    animRef.current = requestAnimationFrame(draw)
+    return () => cancelAnimationFrame(animRef.current)
+  }, [active])
+  if (!active) return null
+  return <canvas ref={canvasRef} className="fixed inset-0 pointer-events-none z-50" style={{width:'100vw',height:'100vh'}} />
+}
 
 function generatePDF(session, questions, answers, plan) {
-  // Dynamic import to keep bundle lean
   import('jspdf').then(({ default: jsPDF }) => {
     const doc = new jsPDF()
     const margin = 15
     let y = margin
-
-    const line = (text, size = 11, bold = false, color = [230, 230, 240]) => {
-      doc.setFontSize(size)
-      doc.setFont('helvetica', bold ? 'bold' : 'normal')
-      doc.setTextColor(...color)
-      doc.text(text, margin, y)
-      y += size * 0.6 + 3
-      if (y > 280) { doc.addPage(); y = margin }
+    const line = (text, size=11, bold=false, color=[230,230,240]) => {
+      doc.setFontSize(size); doc.setFont('helvetica', bold?'bold':'normal')
+      doc.setTextColor(...color); doc.text(text, margin, y)
+      y += size*0.6+3; if(y>280){doc.addPage();y=margin}
     }
-
-    const gap = (n = 6) => { y += n }
-
-    // Header
-    doc.setFillColor(10, 10, 15)
-    doc.rect(0, 0, 210, 297, 'F')
-    doc.setFontSize(28)
-    doc.setFont('helvetica', 'bold')
-    doc.setTextColor(255, 77, 28)
+    const gap = (n=6) => { y+=n }
+    doc.setFillColor(10,10,15); doc.rect(0,0,210,297,'F')
+    doc.setFontSize(28); doc.setFont('helvetica','bold'); doc.setTextColor(255,77,28)
     doc.text('UNFLINCH', margin, 24)
-    doc.setFontSize(11)
-    doc.setTextColor(139, 139, 160)
+    doc.setFontSize(11); doc.setTextColor(139,139,160)
     doc.text('AI Interview Prep Report', margin, 32)
-
-    y = 44
+    y=44
     line(`Company: ${session.company}   Role: ${session.role}`, 11, true)
-    line(`Round: ${session.round}   Date: ${new Date(session.created_at).toLocaleDateString()}`, 10, false, [139, 139, 160])
-    line(`Overall Nervousness: ${session.overall_nervousness ?? '—'} / 100`, 11, true, [255, 77, 28])
-
-    gap(8)
-    line('QUESTION BREAKDOWN', 13, true, [255, 77, 28])
-    doc.setDrawColor(42, 42, 60)
-    doc.line(margin, y, 210 - margin, y)
-    y += 5
-
-    questions.forEach((q, i) => {
-      const ans = answers.find(a => a.question_id === q.id)
-      gap(4)
-      line(`Q${i + 1}: ${q.question_text}`, 10, true, [232, 232, 240])
-      if (ans) {
-        line(`  Nervousness: ${ans.nervousness_score}  Fillers: ${ans.filler_count}  Pauses: ${ans.pause_count}  Rate: ${ans.speech_rate} w/s`, 9, false, [139, 139, 160])
-        line(`  Tip: ${ans.improvement_tip}`, 9, false, [74, 158, 255])
-        if (ans.transcript) {
+    line(`Round: ${session.round}   Date: ${new Date(session.created_at).toLocaleDateString()}`, 10, false, [139,139,160])
+    line(`Overall Nervousness: ${session.overall_nervousness??'—'} / 100`, 11, true, [255,77,28])
+    gap(8); line('QUESTION BREAKDOWN', 13, true, [255,77,28])
+    doc.setDrawColor(42,42,60); doc.line(margin, y, 210-margin, y); y+=5
+    questions.forEach((q,i) => {
+      const ans = answers.find(a=>a.question_id===q.id)
+      gap(4); line(`Q${i+1}: ${q.question_text}`, 10, true, [232,232,240])
+      if(ans){
+        line(`  Score: ${ans.nervousness_score}  Fillers: ${ans.filler_count}  Pauses: ${ans.pause_count}  Rate: ${ans.speech_rate} w/s`, 9, false, [139,139,160])
+        line(`  Tip: ${ans.improvement_tip}`, 9, false, [74,158,255])
+        if(ans.transcript){
           const wrapped = doc.splitTextToSize(`  Transcript: ${ans.transcript}`, 180)
-          wrapped.forEach(l => line(l, 8, false, [139, 139, 160]))
+          wrapped.forEach(l=>line(l,8,false,[139,139,160]))
         }
       }
     })
-
-    gap(10)
-    line('IMPROVEMENT PLAN', 13, true, [0, 229, 160])
-    doc.line(margin, y, 210 - margin, y); y += 5
-    gap(4)
-    const planLines = doc.splitTextToSize(plan, 180)
-    planLines.forEach(l => line(l, 10, false, [232, 232, 240]))
-
-    gap(8)
-    line('Generated by Unflinch · unflinch.app', 8, false, [42, 42, 60])
-
-    doc.save(`unflinch-${session.company}-${session.role}.pdf`.replace(/\s+/g, '-').toLowerCase())
+    gap(10); line('IMPROVEMENT PLAN', 13, true, [0,229,160])
+    doc.line(margin,y,210-margin,y); y+=5; gap(4)
+    doc.splitTextToSize(plan,180).forEach(l=>line(l,10,false,[232,232,240]))
+    gap(8); line('Generated by Unflinch · unflinch.app', 8, false, [42,42,60])
+    doc.save(`unflinch-${session.company}-${session.role}.pdf`.replace(/\s+/g,'-').toLowerCase())
   })
 }
 
 export default function SummaryPage({ navigate, onSignOut, user, params }) {
   const { sessionId, readOnly } = params || {}
-
   const [session, setSession]     = useState(null)
   const [questions, setQuestions] = useState([])
   const [answers, setAnswers]     = useState([])
@@ -82,6 +93,9 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
   const [planLoading, setPlanLoad]= useState(false)
   const [saved, setSaved]         = useState(false)
   const [toast, setToast]         = useState(null)
+  const [confetti, setConfetti]   = useState(false)
+  const [expandBest, setExpandBest]   = useState(false)
+  const [expandWorst, setExpandWorst] = useState(false)
 
   useEffect(() => {
     if (!sessionId) return navigate('dashboard')
@@ -90,7 +104,13 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
         setSession(d.session)
         setQuestions(d.questions || [])
         setAnswers(d.answers || [])
-        // Auto-generate plan
+        // Fire confetti for good scores
+        const avg = d.answers?.length
+          ? d.answers.reduce((a,b)=>a+(b.nervousness_score||0),0)/d.answers.length : 100
+        if (avg < 40) {
+          setTimeout(()=>setConfetti(true), 500)
+          setTimeout(()=>setConfetti(false), 4500)
+        }
         setPlanLoad(true)
         return api.generateImprovementPlan(sessionId)
       })
@@ -109,23 +129,28 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-obsidian flex items-center justify-center">
-        <Spinner className="w-8 h-8 text-mist" />
-      </div>
-    )
-  }
+  if (loading) return (
+    <div className="min-h-screen bg-obsidian flex items-center justify-center">
+      <Spinner className="w-8 h-8 text-mist" />
+    </div>
+  )
 
   const avgScore = answers.length
-    ? (answers.reduce((a, b) => a + (b.nervousness_score || 0), 0) / answers.length).toFixed(1)
-    : 0
+    ? answers.reduce((a,b)=>a+(b.nervousness_score||0),0)/answers.length : 0
+  const scoreColorClass = avgScore < 35 ? 'text-jade' : avgScore < 60 ? 'text-amber' : 'text-ember'
 
-  const scoreColor = avgScore < 35 ? 'text-jade' : avgScore < 60 ? 'text-amber' : 'text-ember'
+  // Best and worst answers
+  const sorted    = [...answers].filter(a=>a.nervousness_score!=null).sort((a,b)=>a.nervousness_score-b.nervousness_score)
+  const bestAns   = sorted[0]
+  const worstAns  = sorted[sorted.length-1]
+  const bestQ     = bestAns  ? questions.find(q=>q.id===bestAns.question_id)  : null
+  const worstQ    = worstAns ? questions.find(q=>q.id===worstAns.question_id) : null
 
   return (
     <>
-      <NavBar onSignOut={onSignOut} userName={user?.phone} />
+      <Confetti active={confetti} />
+      <NavBar onSignOut={onSignOut} userName={user?.email} />
+
       <main className="min-h-screen bg-obsidian px-4 py-8 md:px-8">
         <div className="max-w-3xl mx-auto">
 
@@ -144,19 +169,68 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
 
           {/* Overall score */}
           <div className="card flex items-center gap-6 mb-6 animate-slide-up">
-            <ScoreRing score={parseFloat(avgScore)} size={96} />
+            <ScoreRing score={parseFloat(avgScore.toFixed(1))} size={96} />
             <div>
               <p className="text-mist text-xs uppercase tracking-widest font-mono">Overall Nervousness</p>
-              <p className={`text-4xl font-mono font-bold ${scoreColor} mt-1`}>
-                {avgScore} <span className="text-mist text-lg font-normal">/ 100</span>
+              <p className={`text-4xl font-mono font-bold ${scoreColorClass} mt-1`}>
+                {avgScore.toFixed(1)} <span className="text-mist text-lg font-normal">/ 100</span>
               </p>
               <p className="text-mist text-sm mt-1">
-                {avgScore < 35 ? '🟢 Calm & confident'
-                 : avgScore < 60 ? '🟡 Moderate nerves'
+                {avgScore < 35 ? '🎉 Excellent! You were calm & confident!'
+                 : avgScore < 60 ? '🟡 Good effort — moderate nerves detected'
                  : '🔴 High nervousness — keep practising!'}
               </p>
             </div>
           </div>
+
+          {/* Best vs Worst comparison */}
+          {bestAns && worstAns && bestAns.id !== worstAns.id && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 animate-slide-up">
+              {/* Best */}
+              <div className="card border-jade/30 cursor-pointer" onClick={()=>setExpandBest(v=>!v)}>
+                <div className="flex items-center gap-2 mb-2">
+                  <Trophy size={14} className="text-jade" />
+                  <span className="text-jade text-xs uppercase tracking-widest font-mono">Best Answer</span>
+                  <span className="text-jade font-mono font-bold ml-auto">{bestAns.nervousness_score}</span>
+                </div>
+                <p className="text-chalk text-sm line-clamp-2">{bestQ?.question_text}</p>
+                {expandBest && (
+                  <div className="mt-3 pt-3 border-t border-steel">
+                    <p className="text-mist text-xs mb-1">Transcript:</p>
+                    <p className="text-chalk/80 text-xs leading-relaxed">{bestAns.transcript || '—'}</p>
+                    <div className="flex gap-4 mt-2 text-xs text-mist font-mono">
+                      <span>Fillers: {bestAns.filler_count}</span>
+                      <span>Pauses: {bestAns.pause_count}</span>
+                      <span>Rate: {bestAns.speech_rate} w/s</span>
+                    </div>
+                  </div>
+                )}
+                <p className="text-mist text-xs mt-2">{expandBest ? '▲ collapse' : '▼ expand'}</p>
+              </div>
+
+              {/* Worst */}
+              <div className="card border-ember/30 cursor-pointer" onClick={()=>setExpandWorst(v=>!v)}>
+                <div className="flex items-center gap-2 mb-2">
+                  <AlertCircle size={14} className="text-ember" />
+                  <span className="text-ember text-xs uppercase tracking-widest font-mono">Needs Work</span>
+                  <span className="text-ember font-mono font-bold ml-auto">{worstAns.nervousness_score}</span>
+                </div>
+                <p className="text-chalk text-sm line-clamp-2">{worstQ?.question_text}</p>
+                {expandWorst && (
+                  <div className="mt-3 pt-3 border-t border-steel">
+                    <p className="text-mist text-xs mb-1">Tip:</p>
+                    <p className="text-chalk/80 text-xs leading-relaxed">{worstAns.improvement_tip || '—'}</p>
+                    <div className="flex gap-4 mt-2 text-xs text-mist font-mono">
+                      <span>Fillers: {worstAns.filler_count}</span>
+                      <span>Pauses: {worstAns.pause_count}</span>
+                      <span>Rate: {worstAns.speech_rate} w/s</span>
+                    </div>
+                  </div>
+                )}
+                <p className="text-mist text-xs mt-2">{expandWorst ? '▲ collapse' : '▼ expand'}</p>
+              </div>
+            </div>
+          )}
 
           {/* Question breakdown table */}
           <div className="card mb-6 overflow-hidden animate-slide-up p-0">
@@ -167,39 +241,30 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-steel/50">
-                    <th className="text-left text-mist text-xs font-mono uppercase tracking-wider px-6 py-3">#</th>
-                    <th className="text-left text-mist text-xs font-mono uppercase tracking-wider px-3 py-3">Question</th>
-                    <th className="text-center text-mist text-xs font-mono uppercase tracking-wider px-3 py-3">Score</th>
-                    <th className="text-center text-mist text-xs font-mono uppercase tracking-wider px-3 py-3 hidden md:table-cell">Fillers</th>
-                    <th className="text-center text-mist text-xs font-mono uppercase tracking-wider px-3 py-3 hidden md:table-cell">Pauses</th>
-                    <th className="text-left text-mist text-xs font-mono uppercase tracking-wider px-3 py-3">Top Tip</th>
+                    {['#','Question','Score','Fillers','Pauses','Top Tip'].map(h=>(
+                      <th key={h} className="text-left text-mist text-xs font-mono uppercase tracking-wider px-4 py-3
+                        first:pl-6 last:hidden md:last:table-cell">{h}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {questions.map((q, i) => {
-                    const ans = answers.find(a => a.question_id === q.id)
-                    const sc = ans?.nervousness_score ?? null
-                    const scColor = sc === null ? 'text-mist'
-                      : sc < 35 ? 'text-jade' : sc < 60 ? 'text-amber' : 'text-ember'
+                  {questions.map((q,i) => {
+                    const ans = answers.find(a=>a.question_id===q.id)
+                    const sc  = ans?.nervousness_score ?? null
+                    const scClass = sc===null ? 'text-mist' : sc<35 ? 'text-jade' : sc<60 ? 'text-amber' : 'text-ember'
                     return (
                       <tr key={q.id} className="border-b border-steel/30 hover:bg-steel/20 transition-colors">
-                        <td className="px-6 py-4 text-mist font-mono">{i + 1}</td>
+                        <td className="pl-6 pr-2 py-4 text-mist font-mono">{i+1}</td>
                         <td className="px-3 py-4 text-chalk max-w-xs">
-                          <span className="line-clamp-2">{q.question_text}</span>
+                          <span className="line-clamp-2 text-sm">{q.question_text}</span>
                         </td>
-                        <td className="px-3 py-4 text-center">
-                          <span className={`font-mono font-semibold ${scColor}`}>
-                            {sc?.toFixed(0) ?? '—'}
-                          </span>
+                        <td className="px-3 py-4">
+                          <span className={`font-mono font-semibold ${scClass}`}>{sc?.toFixed(0)??'—'}</span>
                         </td>
-                        <td className="px-3 py-4 text-center text-chalk font-mono hidden md:table-cell">
-                          {ans?.filler_count ?? '—'}
-                        </td>
-                        <td className="px-3 py-4 text-center text-chalk font-mono hidden md:table-cell">
-                          {ans?.pause_count ?? '—'}
-                        </td>
-                        <td className="px-3 py-4 text-mist text-xs max-w-xs">
-                          <span className="line-clamp-2">{ans?.improvement_tip ?? '—'}</span>
+                        <td className="px-3 py-4 text-chalk font-mono text-center">{ans?.filler_count??'—'}</td>
+                        <td className="px-3 py-4 text-chalk font-mono text-center">{ans?.pause_count??'—'}</td>
+                        <td className="px-3 py-4 text-mist text-xs max-w-xs hidden md:table-cell">
+                          <span className="line-clamp-2">{ans?.improvement_tip??'—'}</span>
                         </td>
                       </tr>
                     )
@@ -236,15 +301,13 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
               className="btn-secondary flex items-center justify-center gap-2"
               onClick={() => generatePDF(session, questions, answers, plan)}
             >
-              <Download size={16} />
-              Download PDF
+              <Download size={16} /> Download PDF
             </button>
             <button
               className="btn-ghost flex items-center justify-center gap-2"
               onClick={() => navigate('dashboard')}
             >
-              <LayoutDashboard size={16} />
-              Back to Dashboard
+              <LayoutDashboard size={16} /> Back to Dashboard
             </button>
           </div>
         </div>

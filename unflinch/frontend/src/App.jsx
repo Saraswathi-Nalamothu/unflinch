@@ -1,19 +1,32 @@
 import React from 'react'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './hooks/useAuth'
-import AuthPage     from './pages/AuthPage'
+import AuthPage from './pages/AuthPage'
 import DashboardPage from './pages/DashboardPage'
-import SetupPage    from './pages/SetupPage'
+import SetupPage from './pages/SetupPage'
 import InterviewPage from './pages/InterviewPage'
-import SummaryPage  from './pages/SummaryPage'
-import { Spinner }  from './components/UI'
+import SummaryPage from './pages/SummaryPage'
+import { Spinner } from './components/UI'
 
-/**
- * Minimal client-side router using React state.
- * Pages: 'auth' | 'dashboard' | 'setup' | 'interview' | 'summary'
- */
+function AuthenticatedApp({ user, signOut, page, params, navigate }) {
+  const shared = { navigate, onSignOut: signOut, user }
+
+  switch (page) {
+    case 'setup':
+      return <SetupPage {...shared} />
+    case 'interview':
+      return <InterviewPage {...shared} params={params} />
+    case 'summary':
+      return <SummaryPage {...shared} params={params} />
+    case 'dashboard':
+    default:
+      return <DashboardPage {...shared} />
+  }
+}
+
 export default function App() {
   const { session, user, loading, signOut } = useAuth()
-  const [page, setPage]   = React.useState('dashboard')
+  const [page, setPage] = React.useState('dashboard')
   const [params, setParams] = React.useState({})
 
   function navigate(to, p = {}) {
@@ -22,7 +35,6 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  // Loading state while Supabase session resolves
   if (loading) {
     return (
       <div className="min-h-screen bg-obsidian flex items-center justify-center">
@@ -34,20 +46,32 @@ export default function App() {
     )
   }
 
-  // Not authenticated → show auth
-  if (!session) return <AuthPage />
-
-  const shared = { navigate, onSignOut: signOut, user }
-
-  switch (page) {
-    case 'setup':
-      return <SetupPage     {...shared} />
-    case 'interview':
-      return <InterviewPage {...shared} params={params} />
-    case 'summary':
-      return <SummaryPage   {...shared} params={params} />
-    case 'dashboard':
-    default:
-      return <DashboardPage {...shared} />
-  }
+  return (
+    <Routes>
+      <Route
+        path="/"
+        element={session ? <Navigate to="/dashboard" replace /> : <AuthPage />}
+      />
+      <Route
+        path="/dashboard"
+        element={
+          session ? (
+            <AuthenticatedApp
+              user={user}
+              signOut={signOut}
+              navigate={navigate}
+              page={page}
+              params={params}
+            />
+          ) : (
+            <Navigate to="/" replace />
+          )
+        }
+      />
+      <Route
+        path="*"
+        element={<Navigate to={session ? '/dashboard' : '/'} replace />}
+      />
+    </Routes>
+  )
 }
