@@ -2,14 +2,18 @@
  * Unflinch API client
  * Wraps all backend requests with the Supabase JWT.
  */
+import { supabase } from './supabase'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 async function getToken() {
-  const { data } = await import('./supabase').then(m =>
-    m.supabase.auth.getSession()
-  )
-  return data?.session?.access_token || null
+  try {
+    const { data } = await supabase.auth.getSession()
+    return data?.session?.access_token || null
+  } catch (e) {
+    console.error('getToken error:', e)
+    return null
+  }
 }
 
 async function apiFetch(path, options = {}) {
@@ -29,27 +33,19 @@ async function apiFetch(path, options = {}) {
   return res.json()
 }
 
-// ── Endpoints ────────────────────────────────────────────────
-
 export const api = {
   createSession: (body) =>
     apiFetch('/create_session', { method: 'POST', body: JSON.stringify(body) }),
-
   generateQuestions: (body) =>
     apiFetch('/generate_questions', { method: 'POST', body: JSON.stringify(body) }),
-
   analyzeAnswer: (formData) =>
     apiFetch('/analyze_answer', { method: 'POST', body: formData }),
-
   getSession: (sessionId) =>
     apiFetch(`/get_session/${sessionId}`),
-
   getDashboard: () =>
     apiFetch('/dashboard'),
-
   saveSession: (sessionId) =>
     apiFetch('/save_session', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) }),
-
   generateImprovementPlan: (sessionId) =>
     apiFetch('/generate_improvement_plan', {
       method: 'POST',
