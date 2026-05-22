@@ -1,6 +1,6 @@
 """
 Unflinch – AI Interview Prep Assistant
-FastAPI Backend – Optimized for speed
+FastAPI Backend – Final working version
 """
 
 import os
@@ -10,6 +10,7 @@ import tempfile
 import logging
 from pathlib import Path
 from typing import Optional
+from contextlib import asynccontextmanager
 
 import numpy as np
 import librosa
@@ -33,13 +34,19 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 groq_client      = Groq(api_key=GROQ_API_KEY)
 
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "tiny")
-logger.info(f"Loading Whisper model: {WHISPER_MODEL_SIZE}")
-whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
-logger.info("Whisper model loaded.")
+whisper_model = None
+
+# Load whisper lazily on first use — prevents startup crash on free tier
+def get_whisper():
+    global whisper_model
+    if whisper_model is None:
+        logger.info(f"Loading Whisper model: {WHISPER_MODEL_SIZE}")
+        whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+        logger.info("Whisper model loaded.")
+    return whisper_model
 
 app = FastAPI(title="Unflinch API", version="2.0.0")
 
-# CORS — allow all origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -143,7 +150,7 @@ def compute_nervousness(filler_count, pause_count, speech_rate, recovery_time=No
 def voice_tip(filler_count, pause_count, speech_rate):
     tips = []
     if filler_count >= 3: tips.append((filler_count, f"You used {filler_count} filler word(s). Pause silently instead of saying 'um' or 'uh'."))
-    if pause_count >= 2:  tips.append((pause_count,  f"You had {pause_count} long pause(s). Use bridging phrases to stay fluid."))
+    if pause_count >= 2:  tips.append((pause_count, f"You had {pause_count} long pause(s). Use bridging phrases to stay fluid."))
     if speech_rate < 1.5: tips.append((5, f"You spoke slowly ({speech_rate:.1f} w/s). Aim for 2-3 words/second."))
     if speech_rate > 3.5: tips.append((4, f"You spoke very fast ({speech_rate:.1f} w/s). Slow down for clarity."))
     if not tips: return "Great delivery! Keep that pace and clarity."
@@ -289,7 +296,9 @@ async def analyze_answer(
                 "duration":0,"content_feedback":"","better_answer":"","voice_feedback":"","no_speech":True,
             }
 
-        segments, info = whisper_model.transcribe(tmp_path, beam_size=1, best_of=1, language="en")
+        # Load whisper lazily
+        model = get_whisper()
+        segments, info = model.transcribe(tmp_path, beam_size=1, best_of=1, language="en")
         transcript = " ".join(seg.text for seg in segments).strip()
         duration   = info.duration or 1.0
         word_count = len(transcript.split())
