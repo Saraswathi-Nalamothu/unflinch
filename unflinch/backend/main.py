@@ -32,20 +32,25 @@ GROQ_API_KEY              = os.getenv("GROQ_API_KEY", "")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 groq_client      = Groq(api_key=GROQ_API_KEY)
 
-# Use tiny model for speed — much faster than base
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "tiny")
 logger.info(f"Loading Whisper model: {WHISPER_MODEL_SIZE}")
 whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
 logger.info("Whisper model loaded.")
 
 app = FastAPI(title="Unflinch API", version="2.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# CORS — allow all origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 FILLER_WORDS = ["um","uh","like","so","actually","basically","you know","right","well","kinda","kind of"]
 IDEAL_SPEECH_RATE = 2.5
-# Use the faster 8b model for analysis to reduce latency
 GROQ_MODEL = "llama-3.1-8b-instant"
-# Use bigger model only for question generation where quality matters more
 GROQ_MODEL_QUALITY = "llama-3.3-70b-versatile"
 
 PERSONA_STYLES = {
@@ -54,10 +59,6 @@ PERSONA_STYLES = {
     "startup":  "You are an energetic startup founder. Ask unconventional, vision-focused questions.",
     "pressure": "You are a stress interviewer. Ask tough questions and test resilience under pressure.",
 }
-
-# ---------------------------------------------------------------------------
-# Auth
-# ---------------------------------------------------------------------------
 
 def verify_jwt(authorization: str = Header(None)) -> str:
     if not authorization or not authorization.startswith("Bearer "):
@@ -69,10 +70,6 @@ def verify_jwt(authorization: str = Header(None)) -> str:
     except Exception as e:
         logger.error(f"JWT verification failed: {e}")
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
 
 class GenerateQuestionsRequest(BaseModel):
     session_id: str
@@ -91,10 +88,6 @@ class CreateSessionRequest(BaseModel):
     round: str
     first_time: bool
     distraction_enabled: bool
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def count_fillers(text: str) -> int:
     text_lower = text.lower()
@@ -129,12 +122,10 @@ def count_long_pauses(audio_path: str, min_silence_duration: float = 1.5,
         return 0
 
 def is_silent_audio(audio_path: str, silence_threshold_db: float = -45.0) -> bool:
-    """Check if audio is mostly silent — no speech detected."""
     try:
         y, sr = librosa.load(audio_path, sr=None, mono=True)
         rms = librosa.feature.rms(y=y)[0]
         db  = librosa.amplitude_to_db(rms, ref=np.max)
-        # If more than 90% of frames are silent, no speech
         silent_ratio = np.sum(db < silence_threshold_db) / len(db)
         return silent_ratio > 0.90
     except:
@@ -160,7 +151,6 @@ def voice_tip(filler_count, pause_count, speech_rate):
     return tips[0][1]
 
 def ai_analyze_answer(question_text, transcript, filler_count, pause_count, speech_rate):
-    """Fast AI analysis using smaller model."""
     no_answer_phrases = [
         "i don't know","i dont know","i have no idea","not sure","i'm not sure",
         "im not sure","i cannot answer","sorry i don't","sorry i dont","no idea",
@@ -185,13 +175,13 @@ JSON only (no markdown):
 
     try:
         response = groq_client.chat.completions.create(
-            model=GROQ_MODEL,  # Fast 8b model
+            model=GROQ_MODEL,
             messages=[
                 {"role":"system","content":"Interview coach. JSON only, no markdown."},
                 {"role":"user","content":prompt}
             ],
             temperature=0.4,
-            max_tokens=400,  # Shorter = faster
+            max_tokens=400,
         )
         raw = re.sub(r"```json|```","",response.choices[0].message.content.strip()).strip()
         result = json.loads(raw)
@@ -210,13 +200,9 @@ JSON only (no markdown):
             "overall_tip":      voice_tip(filler_count, pause_count, speech_rate),
         }
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "cors": "enabled"}
 
 @app.post("/create_session")
 def create_session(req: CreateSessionRequest, user_id: str = Depends(verify_jwt)):
@@ -296,65 +282,32 @@ async def analyze_answer(
         tmp_path = tmp.name
 
     try:
-        # ── Check for silence FIRST (fast, no whisper needed) ──
         if is_silent_audio(tmp_path):
             return {
-                "answer_id":        None,
-                "transcript":       "",
-                "filler_count":     0,
-                "pause_count":      0,
-                "speech_rate":      0.0,
-                "nervousness_score":0,
-                "improvement_tip":  "",
-                "duration":         0,
-                "content_feedback": "",
-                "better_answer":    "",
-                "voice_feedback":   "",
-                "no_speech":        True,  # Frontend shows mic warning
+                "answer_id":None,"transcript":"","filler_count":0,"pause_count":0,
+                "speech_rate":0.0,"nervousness_score":0,"improvement_tip":"",
+                "duration":0,"content_feedback":"","better_answer":"","voice_feedback":"","no_speech":True,
             }
 
-        # ── Transcribe (tiny model = fast) ──
-        segments, info = whisper_model.transcribe(
-            tmp_path,
-            beam_size=1,        # beam_size=1 is fastest
-            best_of=1,
-            language="en",      # force English = faster
-        )
+        segments, info = whisper_model.transcribe(tmp_path, beam_size=1, best_of=1, language="en")
         transcript = " ".join(seg.text for seg in segments).strip()
         duration   = info.duration or 1.0
-
-        # ── Check transcript is empty ──
         word_count = len(transcript.split())
+
         if word_count < 3:
             return {
-                "answer_id":        None,
-                "transcript":       transcript,
-                "filler_count":     0,
-                "pause_count":      0,
-                "speech_rate":      0.0,
-                "nervousness_score":0,
-                "improvement_tip":  "",
-                "duration":         round(duration,1),
-                "content_feedback": "",
-                "better_answer":    "",
-                "voice_feedback":   "",
-                "no_speech":        True,
+                "answer_id":None,"transcript":transcript,"filler_count":0,"pause_count":0,
+                "speech_rate":0.0,"nervousness_score":0,"improvement_tip":"",
+                "duration":round(duration,1),"content_feedback":"","better_answer":"","voice_feedback":"","no_speech":True,
             }
 
-        # ── Voice metrics ──
         filler_count = count_fillers(transcript)
         pause_count  = count_long_pauses(tmp_path)
         speech_rate  = round(word_count / max(duration, 1.0), 2)
         nervousness  = compute_nervousness(filler_count, pause_count, speech_rate, recovery_time)
-
-        # ── AI feedback (fast 8b model) ──
-        ai_feedback = ai_analyze_answer(
-            question_text or "Interview question",
-            transcript, filler_count, pause_count, speech_rate
-        )
+        ai_feedback  = ai_analyze_answer(question_text or "Interview question", transcript, filler_count, pause_count, speech_rate)
         tip = ai_feedback["overall_tip"] or voice_tip(filler_count, pause_count, speech_rate)
 
-        # ── Store ──
         result = supabase.table("answers").insert({
             "session_id":session_id,"question_id":question_id,
             "transcript":transcript,"filler_count":filler_count,
@@ -364,18 +317,14 @@ async def analyze_answer(
         }).execute()
 
         return {
-            "answer_id":        result.data[0]["id"],
-            "transcript":       transcript,
-            "filler_count":     filler_count,
-            "pause_count":      pause_count,
-            "speech_rate":      speech_rate,
-            "nervousness_score":nervousness,
-            "improvement_tip":  tip,
-            "duration":         round(duration,1),
-            "content_feedback": ai_feedback["content_feedback"],
-            "better_answer":    ai_feedback["better_answer"],
-            "voice_feedback":   ai_feedback["voice_feedback"],
-            "no_speech":        False,
+            "answer_id":result.data[0]["id"],"transcript":transcript,
+            "filler_count":filler_count,"pause_count":pause_count,
+            "speech_rate":speech_rate,"nervousness_score":nervousness,
+            "improvement_tip":tip,"duration":round(duration,1),
+            "content_feedback":ai_feedback["content_feedback"],
+            "better_answer":ai_feedback["better_answer"],
+            "voice_feedback":ai_feedback["voice_feedback"],
+            "no_speech":False,
         }
     finally:
         os.unlink(tmp_path)
