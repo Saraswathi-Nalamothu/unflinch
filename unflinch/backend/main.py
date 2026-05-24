@@ -1,6 +1,6 @@
 """
 Unflinch – AI Interview Prep Assistant
-FastAPI Backend – Uses Groq Whisper API (no local model = no memory issues)
+FastAPI Backend – Groq Whisper + robust AI analysis
 """
 
 import os
@@ -125,11 +125,16 @@ def compute_nervousness(filler_count, pause_count, speech_rate, recovery_time=No
 
 def voice_tip(filler_count, pause_count, speech_rate):
     tips = []
-    if filler_count >= 3: tips.append((filler_count, f"You used {filler_count} filler word(s). Pause silently instead of saying 'um' or 'uh'."))
-    if pause_count >= 2:  tips.append((pause_count, f"You had {pause_count} long pause(s). Use bridging phrases to stay fluid."))
-    if speech_rate < 1.5: tips.append((5, f"You spoke slowly ({speech_rate:.1f} w/s). Aim for 2-3 words/second."))
-    if speech_rate > 3.5: tips.append((4, f"You spoke very fast ({speech_rate:.1f} w/s). Slow down for clarity."))
-    if not tips: return "Great delivery! Keep that pace and clarity."
+    if filler_count >= 1:
+        tips.append((filler_count + 2, f"You used {filler_count} filler word(s) like 'um' or 'uh'. Practice pausing silently instead — a brief pause sounds more confident than a filler."))
+    if pause_count >= 2:
+        tips.append((pause_count, f"You had {pause_count} long pause(s). Prepare bridging phrases like 'That's a great question, let me think...' to keep momentum."))
+    if speech_rate < 1.8:
+        tips.append((5, f"You spoke slowly at {speech_rate:.1f} w/s. Aim for 2-3 words/second — it sounds more energetic and confident."))
+    if speech_rate > 3.5:
+        tips.append((4, f"You spoke very fast at {speech_rate:.1f} w/s. Slow down — clarity always beats speed in interviews."))
+    if not tips:
+        return f"Good delivery at {speech_rate:.1f} words/second! Keep that natural pace and clarity."
     tips.sort(key=lambda x: -x[0])
     return tips[0][1]
 
@@ -137,50 +142,88 @@ def ai_analyze_answer(question_text, transcript, filler_count, pause_count, spee
     no_answer_phrases = [
         "i don't know","i dont know","i have no idea","not sure","i'm not sure",
         "im not sure","i cannot answer","sorry i don't","sorry i dont","no idea",
+        "i have no","i'm unsure","not really sure",
     ]
     transcript_lower = transcript.lower().strip()
     is_blank = any(p in transcript_lower for p in no_answer_phrases) or len(transcript.split()) < 8
 
+    # Build voice context
+    voice_issues = []
+    if filler_count >= 1: voice_issues.append(f"{filler_count} filler word(s)")
+    if pause_count >= 2: voice_issues.append(f"{pause_count} long pause(s)")
+    if speech_rate < 1.8: voice_issues.append("slow speech pace")
+    if speech_rate > 3.5: voice_issues.append("fast speech pace")
+    voice_summary = ", ".join(voice_issues) if voice_issues else "good delivery overall"
+
     if is_blank:
-        prompt = f"""Interview question: "{question_text}"
+        prompt = f"""You are a professional interview coach. The candidate could not answer this interview question.
+
+Question: "{question_text}"
 Candidate said: "{transcript}"
-They didn't know the answer. Teach them briefly.
 
-JSON only (no markdown):
-{{"content_feedback":"Why this question matters (1 sentence).","better_answer":"Model answer in first person (3-4 sentences).","voice_feedback":"One delivery tip.","overall_tip":"One action to prepare this answer."}}"""
+Respond with ONLY this JSON (no markdown, no extra text):
+{{"content_feedback": "Explain in 1-2 sentences why interviewers ask this question and what they are really looking for.", "better_answer": "Write a complete, confident model answer in first person (4-5 sentences). Use STAR format: describe a specific situation, what action you took, and the positive result. Make it realistic and impressive.", "voice_feedback": "One encouraging tip about voice delivery for next attempt.", "overall_tip": "The single most important thing they should do to prepare this answer."}}"""
     else:
-        prompt = f"""Question: "{question_text}"
-Answer: "{transcript}"
-Metrics: {filler_count} fillers, {pause_count} pauses, {speech_rate:.1f}w/s rate.
+        prompt = f"""You are a professional interview coach reviewing this interview answer.
 
-JSON only (no markdown):
-{{"content_feedback":"What was good and what was missing (2 sentences).","better_answer":"Improved version in first person (3-4 sentences).","voice_feedback":"One delivery tip based on metrics.","overall_tip":"Single most important improvement."}}"""
+Question: "{question_text}"
+Answer transcript: "{transcript}"
+Voice metrics: {voice_summary}, speech rate {speech_rate:.1f} words/second
 
-    try:
-        response = groq_client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role":"system","content":"Interview coach. JSON only, no markdown."},
-                {"role":"user","content":prompt}
-            ],
-            temperature=0.4,
-            max_tokens=400,
-        )
-        raw = re.sub(r"```json|```","",response.choices[0].message.content.strip()).strip()
-        result = json.loads(raw)
+Analyze the CONTENT and DELIVERY thoroughly.
+
+Respond with ONLY this JSON (no markdown, no extra text):
+{{"content_feedback": "2-3 sentences: start with what was genuinely good, then identify the most important missing element (specific example, measurable result, or better structure).", "better_answer": "Rewrite their answer in first person (4-5 sentences), keeping their ideas but improving structure with STAR format, adding specifics, and making it more impactful. This should be clearly better than what they said.", "voice_feedback": "Specific actionable tip based on: {voice_summary}.", "overall_tip": "One sentence: the single most impactful change they can make to their next answer."}}"""
+
+    raw = ""
+    for attempt in range(3):
+        try:
+            response = groq_client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are an expert interview coach. Respond with valid JSON only. No markdown backticks. No text before or after the JSON object."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=700,
+            )
+            raw = response.choices[0].message.content.strip()
+            raw = re.sub(r"```json|```", "", raw).strip()
+            # Extract JSON object even if there's surrounding text
+            match = re.search(r'\{[\s\S]*\}', raw)
+            if match:
+                raw = match.group()
+            parsed = json.loads(raw)
+            cf = str(parsed.get("content_feedback", "")).strip()
+            ba = str(parsed.get("better_answer", "")).strip()
+            vf = str(parsed.get("voice_feedback", "")).strip()
+            ot = str(parsed.get("overall_tip", "")).strip()
+            if cf and ba:
+                return {
+                    "content_feedback": cf,
+                    "better_answer":    ba,
+                    "voice_feedback":   vf or voice_tip(filler_count, pause_count, speech_rate),
+                    "overall_tip":      ot or voice_tip(filler_count, pause_count, speech_rate),
+                }
+        except Exception as e:
+            logger.error(f"AI analysis attempt {attempt+1} failed: {e} | raw: {raw[:200]}")
+            continue
+
+    # Meaningful fallback — never "unavailable"
+    vt = voice_tip(filler_count, pause_count, speech_rate)
+    if is_blank:
         return {
-            "content_feedback": result.get("content_feedback",""),
-            "better_answer":    result.get("better_answer",""),
-            "voice_feedback":   result.get("voice_feedback",""),
-            "overall_tip":      result.get("overall_tip",""),
+            "content_feedback": f"This question tests your ability to handle real challenges relevant to the role. Interviewers want to see how you think and what you've actually done.",
+            "better_answer": "Use the STAR method to answer: describe a Situation you faced, your Task or goal, the Actions you took step by step, and the Result you achieved. Prepare 2-3 real stories from your experience that you can adapt to this type of question.",
+            "voice_feedback": vt,
+            "overall_tip": "Write down a specific 2-minute story from your experience that answers this question, and practice it out loud 5 times.",
         }
-    except Exception as e:
-        logger.error(f"AI analysis error: {e}")
+    else:
         return {
-            "content_feedback": "Analysis unavailable.",
-            "better_answer":    "",
-            "voice_feedback":   voice_tip(filler_count, pause_count, speech_rate),
-            "overall_tip":      voice_tip(filler_count, pause_count, speech_rate),
+            "content_feedback": "Your answer showed understanding of the topic. To make it stronger, add a specific real example with a measurable outcome using the STAR format (Situation, Task, Action, Result).",
+            "better_answer": "Structure your answer like this: 'In my previous experience, I faced [specific situation]. I was responsible for [task]. I approached it by [specific actions]. As a result, [measurable positive outcome].' This makes your answer concrete and memorable.",
+            "voice_feedback": vt,
+            "overall_tip": "Always end your answer with a specific result or learning — it makes a lasting impression on the interviewer.",
         }
 
 @app.get("/health")
@@ -202,33 +245,45 @@ def create_session(req: CreateSessionRequest, user_id: str = Depends(verify_jwt)
 @app.post("/generate_questions")
 def generate_questions(req: GenerateQuestionsRequest, user_id: str = Depends(verify_jwt)):
     persona_style = PERSONA_STYLES.get(req.persona, PERSONA_STYLES["friendly"])
-    experience_ctx = ("First-time candidate — include introductory questions."
-                      if req.first_time else "Experienced candidate — ask deeper questions.")
+    experience_ctx = ("This is a first-time candidate — include introductory questions about background and motivation."
+                      if req.first_time else "Experienced candidate — ask deeper, role-specific questions.")
     round_guidance = {
-        "First Round": "Background, motivation, cultural fit.",
-        "Technical":   "Technical skills, problem-solving, system design.",
-        "HR":          "Salary, work style, team dynamics, career goals.",
-        "Final Round": "Leadership, strategic thinking, company scenarios.",
-        "Case Study":  "Analytical thinking, structured problem-solving.",
-    }.get(req.round, "Mix behavioral and technical questions.")
+        "First Round": "Background, motivation, cultural fit, basic role understanding.",
+        "Technical":   "Deep technical skills, problem-solving, system design, coding concepts.",
+        "HR":          "Salary expectations, work style, team dynamics, career goals.",
+        "Final Round": "Leadership, strategic thinking, vision, company-specific scenarios.",
+        "Case Study":  "Analytical thinking, structured problem-solving, data-driven decisions.",
+    }.get(req.round, "Mix of behavioral and technical questions.")
 
     prompt = f"""{persona_style}
-Interviewing at {req.company} for {req.role} ({req.round}: {round_guidance}).
-{experience_ctx}
 
-Generate 5 interview questions specific to {req.company} and {req.role}.
-JSON array only: ["Q1?","Q2?","Q3?","Q4?","Q5?"]"""
+You are interviewing a candidate at {req.company} for the position of {req.role}.
+Round: {req.round} — Focus: {round_guidance}
+Candidate level: {experience_ctx}
+
+Generate exactly 5 highly specific interview questions that:
+1. Reference {req.company}'s actual products, industry, values, or known challenges
+2. Are directly relevant to the day-to-day responsibilities of a {req.role}
+3. Match the difficulty and style of a real {req.round} at {req.company}
+4. Mix behavioral (STAR format), situational, and role-specific technical questions
+5. Are realistic questions a real interviewer would actually ask
+
+Respond with ONLY a JSON array of 5 strings. No explanation, no markdown.
+["Question 1?", "Question 2?", "Question 3?", "Question 4?", "Question 5?"]"""
 
     try:
         response = groq_client.chat.completions.create(
             model=GROQ_MODEL_QUALITY,
             messages=[
-                {"role":"system","content":"Expert interviewer. Valid JSON array only."},
+                {"role":"system","content":"Expert interviewer. Respond with valid JSON array only. No markdown."},
                 {"role":"user","content":prompt}
             ],
-            temperature=0.7, max_tokens=800,
+            temperature=0.7, max_tokens=900,
         )
         raw = re.sub(r"```json|```","",response.choices[0].message.content.strip()).strip()
+        match = re.search(r'\[[\s\S]*\]', raw)
+        if match:
+            raw = match.group()
         questions_list = json.loads(raw)
         if not isinstance(questions_list,list) or len(questions_list)<5:
             raise ValueError("Invalid format")
@@ -239,11 +294,11 @@ JSON array only: ["Q1?","Q2?","Q3?","Q4?","Q5?"]"""
     except Exception as e:
         logger.error(f"generate_questions error: {e}")
         fallback = [
-            f"Tell me about your experience relevant to {req.role} at {req.company}.",
-            "Describe a challenging project and how you overcame it.",
-            "Where do you see yourself in 5 years?",
-            f"What excites you about working at {req.company}?",
-            "Tell me about a time you worked under pressure.",
+            f"Tell me about your most relevant experience for the {req.role} role at {req.company}.",
+            f"How do you stay updated with the latest developments in your field relevant to {req.company}'s work?",
+            "Describe a challenging project you led. What was your approach and what were the results?",
+            f"Why do you want to work at {req.company} specifically, and how does this {req.role} role align with your goals?",
+            "Tell me about a time you had to learn something quickly under pressure. How did you handle it?",
         ]
         rows = [{"session_id":req.session_id,"question_text":q,"order_index":i}
                 for i,q in enumerate(fallback)]
@@ -265,7 +320,7 @@ async def analyze_answer(
         tmp_path = tmp.name
 
     try:
-        # Step 1: Transcribe using Groq Whisper API (no local model needed!)
+        # Transcribe using Groq Whisper API
         with open(tmp_path, "rb") as audio_file:
             transcription = groq_client.audio.transcriptions.create(
                 file=(Path(tmp_path).name, audio_file),
@@ -275,7 +330,6 @@ async def analyze_answer(
         transcript = transcription.text.strip() if transcription.text else ""
         duration = getattr(transcription, 'duration', None) or 30.0
 
-        # Step 2: Check for no speech
         word_count = len(transcript.split())
         if word_count < 3:
             return {
@@ -284,17 +338,13 @@ async def analyze_answer(
                 "duration":round(duration,1),"content_feedback":"","better_answer":"","voice_feedback":"","no_speech":True,
             }
 
-        # Step 3: Voice metrics
         filler_count = count_fillers(transcript)
         pause_count  = count_long_pauses(tmp_path)
         speech_rate  = round(word_count / max(duration, 1.0), 2)
         nervousness  = compute_nervousness(filler_count, pause_count, speech_rate, recovery_time)
-
-        # Step 4: AI feedback
-        ai_feedback = ai_analyze_answer(question_text or "Interview question", transcript, filler_count, pause_count, speech_rate)
+        ai_feedback  = ai_analyze_answer(question_text or "Interview question", transcript, filler_count, pause_count, speech_rate)
         tip = ai_feedback["overall_tip"] or voice_tip(filler_count, pause_count, speech_rate)
 
-        # Step 5: Store
         result = supabase.table("answers").insert({
             "session_id":session_id,"question_id":question_id,
             "transcript":transcript,"filler_count":filler_count,
@@ -359,21 +409,26 @@ def generate_improvement_plan(req: dict, user_id: str = Depends(verify_jwt)):
         avg_rate    = sum(a["speech_rate"]   or 0 for a in data)/len(data)
         avg_score   = sum(a["nervousness_score"] or 0 for a in data)/len(data)
 
-        prompt = f"""Interview coach. Write a short improvement plan.
-Metrics: fillers={avg_fillers:.1f}/ans, pauses={avg_pauses:.1f}/ans, rate={avg_rate:.1f}w/s, nervousness={avg_score:.1f}/100.
+        prompt = f"""You are a professional interview coach. Write a personalised improvement plan based on this performance data.
 
-3-part plan:
-1. **Key Weakness**: Most impactful area.
-2. **Daily Drill**: 5-minute exercise.
-3. **Next Target**: One measurable goal.
-Under 150 words. Encouraging tone."""
+Average filler words per answer: {avg_fillers:.1f}
+Average long pauses per answer: {avg_pauses:.1f}
+Average speech rate: {avg_rate:.1f} words/second (ideal: 2.0-3.0)
+Overall nervousness score: {avg_score:.1f}/100 (lower is better)
+
+Write a 3-part improvement plan:
+1. **Key Weakness**: The single most impactful area to fix based on the data above.
+2. **Daily Drill**: One specific, actionable 5-minute daily exercise to address it.
+3. **Next Session Target**: One measurable goal for the next practice session.
+
+Be specific, encouraging, and practical. Under 180 words."""
 
         response = groq_client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[{"role":"user","content":prompt}],
-            temperature=0.6, max_tokens=300,
+            temperature=0.5, max_tokens=350,
         )
         return {"plan":response.choices[0].message.content.strip()}
     except Exception as e:
         logger.error(f"improvement plan error: {e}")
-        return {"plan":"Focus on reducing filler words, controlling your pace, and practising smooth transitions."}
+        return {"plan":"Focus on reducing filler words by practising silent pauses, aim for 2-3 words/second speech rate, and always include a specific example with measurable results in your answers."}
