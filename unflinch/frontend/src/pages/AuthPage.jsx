@@ -1,200 +1,138 @@
-import React, { useState, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import React, { useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { Spinner, Toast } from '../components/UI'
-
-function mapAuthError(err) {
-  const msg = err?.message ?? ''
-  const code = err?.code ?? ''
-  if (code === 'user_already_exists' || /already registered/i.test(msg)) {
-    return 'This email is already registered. Try signing in instead.'
-  }
-  if (code === 'invalid_credentials' || /invalid login credentials/i.test(msg)) {
-    return 'Invalid email or password. Please try again.'
-  }
-  if (code === 'email_not_confirmed') {
-    return 'Please confirm your email before signing in.'
-  }
-  if (/password/i.test(msg) && /weak|short/i.test(msg)) {
-    return 'Password must be at least 6 characters.'
-  }
-  return msg || 'Something went wrong. Please try again.'
-}
-
-function GoogleIcon({ className = 'w-5 h-5' }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
-      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-    </svg>
-  )
-}
+import { Mail, Lock } from 'lucide-react'
 
 export default function AuthPage() {
-  const navigate = useNavigate()
-  const [mode, setMode] = useState('login')
-  const [email, setEmail] = useState('')
+  const [mode, setMode]         = useState('login')
+  const [email, setEmail]       = useState('')
   const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [toast, setToast] = useState(null)
+  const [loading, setLoading]   = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(false)
+  const [toast, setToast]       = useState(null)
 
-  const showToast = useCallback((message, type = 'info') => {
+  const showToast = (message, type = 'info') => {
     setToast({ message, type })
-    setTimeout(() => setToast(null), 4500)
-  }, [])
+    setTimeout(() => setToast(null), 4000)
+  }
 
-  async function handleEmailSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
-    if (password.length < 6) {
-      showToast('Password must be at least 6 characters', 'error')
-      return
-    }
-    if (mode === 'signup' && password !== confirmPassword) {
-      showToast('Passwords do not match', 'error')
-      return
-    }
-
+    if (password.length < 6) return showToast('Password must be at least 6 characters', 'error')
     setLoading(true)
     try {
       if (mode === 'signup') {
-        const { data, error } = await supabase.auth.signUp({ email, password })
+        const { error } = await supabase.auth.signUp({ email, password })
         if (error) throw error
-        if (data.session) {
-          showToast('Account created. Welcome!', 'success')
-          navigate('/dashboard')
-        } else {
-          showToast('Check your email to confirm your account', 'info')
-        }
+        showToast('Account created! You are now logged in.', 'success')
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
-        showToast('Welcome back!', 'success')
-        navigate('/dashboard')
       }
     } catch (err) {
-      showToast(mapAuthError(err), 'error')
+      showToast(err.message || 'Something went wrong', 'error')
     } finally {
       setLoading(false)
     }
   }
 
   async function handleGoogleSignIn() {
-    setLoading(true)
+    setGoogleLoading(true)
     try {
-      const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' })
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin,
+        },
+      })
       if (error) throw error
     } catch (err) {
-      showToast(mapAuthError(err), 'error')
-      setLoading(false)
+      showToast(err.message || 'Google sign in failed', 'error')
+      setGoogleLoading(false)
     }
   }
 
   return (
-    <div className="min-h-screen bg-obsidian flex flex-col items-center justify-center px-4 py-10">
-      <div className="w-full max-w-sm animate-slide-up">
+    <div className="min-h-screen bg-obsidian flex flex-col items-center justify-center px-4">
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-96 bg-ember/5 rounded-full blur-3xl pointer-events-none" />
+
+      <div className="w-full max-w-sm relative z-10 animate-slide-up">
+        {/* Logo */}
         <div className="text-center mb-10">
           <h1 className="heading-display text-6xl gradient-text mb-2">UNFLINCH</h1>
           <p className="text-mist text-sm">AI Interview Prep · Voice Analysis · Real Feedback</p>
         </div>
 
         <div className="card">
+          {/* Tab switcher */}
           <div className="flex mb-6 bg-carbon rounded-xl p-1">
             <button
-              type="button"
               className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all duration-200
-                ${mode === 'login' ? 'bg-graphite text-chalk' : 'text-mist'}`}
+                ${mode === 'login' ? 'bg-graphite text-chalk' : 'text-mist hover:text-chalk'}`}
               onClick={() => setMode('login')}
-              disabled={loading}
-            >
-              Sign In
-            </button>
+            >Sign In</button>
             <button
-              type="button"
               className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all duration-200
-                ${mode === 'signup' ? 'bg-graphite text-chalk' : 'text-mist'}`}
+                ${mode === 'signup' ? 'bg-graphite text-chalk' : 'text-mist hover:text-chalk'}`}
               onClick={() => setMode('signup')}
-              disabled={loading}
-            >
-              Sign Up
-            </button>
+            >Sign Up</button>
           </div>
 
-          <form onSubmit={handleEmailSubmit} className="flex flex-col gap-4">
-            <div>
-              <label className="label" htmlFor="auth-email">Email</label>
-              <input
-                id="auth-email"
-                className="input"
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                required
-                autoFocus
-                disabled={loading}
-              />
-            </div>
-            <div>
-              <label className="label" htmlFor="auth-password">Password</label>
-              <input
-                id="auth-password"
-                className="input"
-                type="password"
-                placeholder="minimum 6 characters"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                required
-                minLength={6}
-                disabled={loading}
-              />
-            </div>
-            {mode === 'signup' && (
-              <div>
-                <label className="label" htmlFor="auth-confirm">Confirm password</label>
-                <input
-                  id="auth-confirm"
-                  className="input"
-                  type="password"
-                  placeholder="repeat password"
-                  value={confirmPassword}
-                  onChange={e => setConfirmPassword(e.target.value)}
-                  required
-                  minLength={6}
-                  disabled={loading}
-                />
-              </div>
+          {/* Google Sign In */}
+          <button
+            onClick={handleGoogleSignIn}
+            disabled={googleLoading}
+            className="w-full flex items-center justify-center gap-3 bg-white hover:bg-gray-50
+                       text-gray-700 font-medium py-3 px-4 rounded-xl transition-all duration-200
+                       active:scale-95 disabled:opacity-50 mb-4"
+          >
+            {googleLoading ? (
+              <Spinner className="w-4 h-4 text-gray-500" />
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 18 18">
+                <path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/>
+                <path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2.04a4.8 4.8 0 0 1-7.18-2.54H1.83v2.07A8 8 0 0 0 8.98 17z"/>
+                <path fill="#FBBC05" d="M4.5 10.48A4.8 4.8 0 0 1 4.5 7.5V5.43H1.83a8 8 0 0 0 0 7.14l2.67-2.09z"/>
+                <path fill="#EA4335" d="M8.98 3.58c1.32 0 2.5.45 3.44 1.35l2.56-2.56A8 8 0 0 0 1.83 5.43L4.5 7.5a4.77 4.77 0 0 1 4.48-3.92z"/>
+              </svg>
             )}
-            <button
-              type="submit"
-              className="btn-primary w-full flex items-center justify-center gap-2 mt-1"
-              disabled={loading}
-            >
+            <span>{googleLoading ? 'Redirecting...' : 'Continue with Google'}</span>
+          </button>
+
+          {/* Divider */}
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex-1 h-px bg-steel" />
+            <span className="text-mist text-xs">or</span>
+            <div className="flex-1 h-px bg-steel" />
+          </div>
+
+          {/* Email form */}
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div>
+              <label className="label">Email</label>
+              <div className="relative">
+                <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-mist" />
+                <input className="input pl-9" type="email" placeholder="you@example.com"
+                  value={email} onChange={e => setEmail(e.target.value)} required autoFocus />
+              </div>
+            </div>
+            <div>
+              <label className="label">Password</label>
+              <div className="relative">
+                <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-mist" />
+                <input className="input pl-9" type="password" placeholder="minimum 6 characters"
+                  value={password} onChange={e => setPassword(e.target.value)} required />
+              </div>
+            </div>
+            <button className="btn-primary w-full flex items-center justify-center gap-2 mt-2" disabled={loading}>
               {loading ? <Spinner className="w-4 h-4" /> : mode === 'login' ? 'Sign In →' : 'Create Account →'}
             </button>
           </form>
-
-          <div className="relative my-6">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-steel" />
-            </div>
-            <div className="relative flex justify-center text-xs uppercase tracking-widest">
-              <span className="bg-graphite px-3 text-mist">or</span>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={handleGoogleSignIn}
-            disabled={loading}
-            className="btn-secondary w-full flex items-center justify-center gap-3"
-          >
-            <GoogleIcon />
-            Continue with Google
-          </button>
         </div>
+
+        <p className="text-center text-mist/60 text-xs mt-6">
+          By continuing, you agree to practise interviews without flinching.
+        </p>
       </div>
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
