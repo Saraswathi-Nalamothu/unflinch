@@ -35,6 +35,26 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  // ===== DEMO BYPASS - FORCE DASHBOARD =====
+  // This completely ignores authentication and shows the dashboard
+  const demoMode = localStorage.getItem('demo_mode') === 'true';
+  
+  if (demoMode) {
+    // Create a fake user
+    const fakeUser = { id: 'demo_user', email: 'demo@example.com', name: 'Demo User' };
+    // Render the dashboard directly, bypassing ALL checks
+    return (
+      <AuthenticatedApp 
+        user={fakeUser} 
+        signOut={() => {}} 
+        navigate={navigate} 
+        page={page} 
+        params={params} 
+      />
+    );
+  }
+  // =========================================
+
   if (loading) {
     return (
       <div className="min-h-screen bg-obsidian flex items-center justify-center">
