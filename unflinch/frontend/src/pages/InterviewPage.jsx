@@ -177,6 +177,17 @@ function FeedbackCard({ result, isLast, onNext, onExit }) {
         <p className="text-chalk/80 text-sm leading-relaxed mt-3">{result.transcript || '(no speech detected)'}</p>
       </details>
 
+      {/* Challenge Question */}
+      {result.challenge_question && (
+        <div className="card bg-carbon border-ember/30 mt-2">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={14} className="text-ember" />
+            <p className="text-ember text-xs uppercase tracking-widest font-mono">Follow-up Challenge</p>
+          </div>
+          <p className="text-chalk text-sm leading-relaxed italic">"{result.challenge_question}"</p>
+        </div>
+      )}
+
       {/* Next */}
       <button className="btn-primary w-full flex items-center justify-center gap-2 py-4 text-base" onClick={onNext}>
         {isLast ? <><CheckCircle size={18} /> Finish & View Summary</> : <>Next Question <ChevronRight size={18} /></>}
@@ -201,6 +212,10 @@ export default function InterviewPage({ navigate, onSignOut, user, params }) {
   const [loading, setLoading]             = useState(true)
   const [showExitModal, setShowExitModal] = useState(false)
   const [toast, setToast]                 = useState(null)
+  
+  const [hintText, setHintText]           = useState(null)
+  const [hintLoading, setHintLoading]     = useState(false)
+  const [hintUsed, setHintUsed]           = useState(false)
 
   const { recording, audioBlob, duration, error, start, stop, reset } = useRecorder(120)
   const distractionTimerRef = useRef(null)
@@ -247,6 +262,7 @@ export default function InterviewPage({ navigate, onSignOut, user, params }) {
     fd.append('session_id', sessionId)
     fd.append('question_id', question.id)
     fd.append('question_text', question.question_text)
+    fd.append('hint_used', String(hintUsed))
     if (recoveryTime !== null) fd.append('recovery_time', String(recoveryTime))
     if (audioBlob) fd.append('audio', audioBlob, 'answer.webm')
 
@@ -280,6 +296,8 @@ export default function InterviewPage({ navigate, onSignOut, user, params }) {
       setCurrentIdx(i => i + 1)
       setResult(null)
       setNoSpeech(false)
+      setHintText(null)
+      setHintUsed(false)
       reset()
     } else {
       api.saveSession(sessionId).catch(() => {})
@@ -300,6 +318,23 @@ export default function InterviewPage({ navigate, onSignOut, user, params }) {
 
   const question = questions[currentIdx]
   const isLast   = currentIdx === questions.length - 1
+
+  async function fetchHint() {
+    if (hintText || hintLoading) return
+    setHintLoading(true)
+    try {
+      const res = await api.generateHint({
+        session_id: sessionId,
+        question_text: question.question_text
+      })
+      setHintText(res.hint)
+      setHintUsed(true)
+    } catch (err) {
+      setToast({ message: 'Could not load hint', type: 'error' })
+    } finally {
+      setHintLoading(false)
+    }
+  }
 
   return (
     <>
@@ -344,6 +379,24 @@ export default function InterviewPage({ navigate, onSignOut, user, params }) {
           {/* Recording */}
           {!result && !analysing && !noSpeech && (
             <div className="flex flex-col items-center py-8 gap-6 animate-fade-in">
+              {!recording && (
+                <div className="w-full mb-4">
+                  {hintText ? (
+                    <div className="card bg-carbon border-azure/30 animate-fade-in text-sm text-chalk leading-relaxed whitespace-pre-line">
+                      <p className="text-azure text-xs uppercase tracking-widest font-mono mb-2">💡 Hint</p>
+                      {hintText}
+                    </div>
+                  ) : (
+                    <button 
+                      onClick={fetchHint} 
+                      disabled={hintLoading}
+                      className="text-azure text-sm hover:underline flex items-center justify-center w-full gap-2"
+                    >
+                      {hintLoading ? <Spinner className="w-4 h-4" /> : '💡 Need a hint?'}
+                    </button>
+                  )}
+                </div>
+              )}
               <RecordButton
                 recording={recording}
                 onStart={handleStartRecording}

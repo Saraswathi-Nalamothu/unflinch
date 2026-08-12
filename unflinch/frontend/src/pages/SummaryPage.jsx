@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { api } from '../lib/api'
 import { NavBar, ScoreRing, Spinner, Toast } from '../components/UI'
-import { Download, LayoutDashboard, Sparkles, Trophy, AlertCircle } from 'lucide-react'
+import { Download, LayoutDashboard, Sparkles, Trophy, AlertCircle, Info, Target, Calendar, CheckCircle2 } from 'lucide-react'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 
 // ── Confetti (same as dashboard) ─────────────────────────────
 function Confetti({ active }) {
@@ -88,7 +89,7 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
   const [session, setSession]     = useState(null)
   const [questions, setQuestions] = useState([])
   const [answers, setAnswers]     = useState([])
-  const [plan, setPlan]           = useState('')
+  const [plan, setPlan]           = useState(null)
   const [loading, setLoading]     = useState(true)
   const [planLoading, setPlanLoad]= useState(false)
   const [saved, setSaved]         = useState(false)
@@ -114,7 +115,7 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
         setPlanLoad(true)
         return api.generateImprovementPlan(sessionId)
       })
-      .then(d => setPlan(d.plan || ''))
+      .then(d => setPlan(d || null))
       .catch(err => setToast({ message: err.message, type: 'error' }))
       .finally(() => { setLoading(false); setPlanLoad(false) })
   }, [sessionId])
@@ -145,6 +146,14 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
   const worstAns  = sorted[sorted.length-1]
   const bestQ     = bestAns  ? questions.find(q=>q.id===bestAns.question_id)  : null
   const worstQ    = worstAns ? questions.find(q=>q.id===worstAns.question_id) : null
+
+  // Chart data
+  const chartData = answers.map((a, i) => ({
+    name: `Q${i + 1}`,
+    confidence: a.confidence_score ?? 0
+  }))
+  const isTrendingUp = chartData.length > 1 && chartData[chartData.length - 1].confidence >= chartData[0].confidence
+  const chartColor = isTrendingUp ? '#00E5A0' : '#FF4D1C'
 
   return (
     <>
@@ -274,6 +283,42 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
             </div>
           </div>
 
+          {/* Know Before You Go */}
+          {session && session.session_context && session.session_context.length > 0 && (
+            <div className="card mb-6 border-azure/30 animate-slide-up">
+              <div className="flex items-center gap-2 mb-4">
+                <Info size={16} className="text-azure" />
+                <p className="text-azure text-xs uppercase tracking-widest font-mono">Know Before You Go</p>
+              </div>
+              <ul className="text-chalk text-sm space-y-2 list-disc pl-5">
+                {session.session_context.map((point, idx) => (
+                  <li key={idx} className="leading-relaxed">{point}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Confidence Trend Chart */}
+          {chartData.length > 0 && (
+            <div className="card mb-6 border-steel/30 animate-slide-up">
+              <p className="text-mist text-xs uppercase tracking-widest font-mono mb-4">Confidence Trend</p>
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#2A2A35" />
+                    <XAxis dataKey="name" stroke="#8B8BA0" tick={{fontSize: 12}} />
+                    <YAxis stroke="#8B8BA0" tick={{fontSize: 12}} domain={[0, 100]} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#1E1E28', border: '1px solid #2A2A35', borderRadius: '8px' }}
+                      itemStyle={{ color: '#E8E8F0' }}
+                    />
+                    <Line type="monotone" dataKey="confidence" stroke={chartColor} strokeWidth={3} dot={{r: 4, fill: chartColor}} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
           {/* Improvement plan */}
           <div className="card mb-8 border-jade/30 animate-slide-up">
             <div className="flex items-center gap-2 mb-4">
@@ -285,8 +330,68 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
                 <Spinner className="w-4 h-4 text-mist" />
                 <span className="text-mist text-sm">Generating your plan…</span>
               </div>
+            ) : plan ? (
+              <div className="flex flex-col gap-6">
+                <div>
+                  <h4 className="text-chalk font-semibold mb-2">Overall Verdict</h4>
+                  <p className="text-mist text-sm leading-relaxed">{plan.overall_verdict}</p>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-carbon p-4 rounded-xl border border-jade/20">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Trophy size={14} className="text-jade" />
+                      <h4 className="text-jade text-xs uppercase tracking-widest font-mono">Top Strengths</h4>
+                    </div>
+                    <ul className="text-mist text-sm space-y-1">
+                      {plan.top_strengths?.map((s, i) => <li key={i}>• {s}</li>)}
+                    </ul>
+                  </div>
+                  <div className="bg-carbon p-4 rounded-xl border border-ember/20">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Target size={14} className="text-ember" />
+                      <h4 className="text-ember text-xs uppercase tracking-widest font-mono">Critical Gaps</h4>
+                    </div>
+                    <ul className="text-mist text-sm space-y-1">
+                      {plan.critical_gaps?.map((g, i) => <li key={i}>• {g}</li>)}
+                    </ul>
+                  </div>
+                </div>
+
+                {plan.weekly_plan && plan.weekly_plan.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <Calendar size={14} className="text-violet" />
+                      <h4 className="text-violet text-xs uppercase tracking-widest font-mono">Weekly Drill Plan</h4>
+                    </div>
+                    <div className="space-y-3">
+                      {plan.weekly_plan.map((wp, i) => (
+                        <div key={i} className="flex gap-3 bg-carbon/50 p-3 rounded-lg border border-steel/30">
+                          <div className="w-8 h-8 rounded-full bg-violet/10 text-violet flex items-center justify-center font-mono text-xs shrink-0">
+                            W{wp.week}
+                          </div>
+                          <div>
+                            <p className="text-chalk text-sm font-medium">{wp.focus}</p>
+                            <p className="text-mist text-xs mt-1">{wp.action}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {plan.company_specific_tip && (
+                  <div className="bg-azure/5 p-4 rounded-xl border border-azure/30 mt-2">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Info size={14} className="text-azure" />
+                      <h4 className="text-azure text-xs uppercase tracking-widest font-mono">{session?.company} Tip</h4>
+                    </div>
+                    <p className="text-chalk text-sm leading-relaxed">{plan.company_specific_tip}</p>
+                  </div>
+                )}
+              </div>
             ) : (
-              <div className="text-chalk text-sm leading-relaxed whitespace-pre-line">{plan}</div>
+              <p className="text-mist text-sm">Could not generate plan.</p>
             )}
           </div>
 

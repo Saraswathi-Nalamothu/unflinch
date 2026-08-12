@@ -58,10 +58,10 @@ GROQ_MODEL = "llama-3.1-8b-instant"
 GROQ_MODEL_QUALITY = "llama-3.3-70b-versatile"
 
 PERSONA_STYLES = {
-    "friendly": "You are a warm, supportive HR interviewer. Focus on culture fit, values, soft skills.",
-    "strict":   "You are a strict technical interviewer. Ask deep technical, system design questions. Be direct.",
-    "startup":  "You are an energetic startup founder. Ask unconventional, vision-focused questions.",
-    "pressure": "You are a stress interviewer. Ask tough questions and test resilience under pressure.",
+    "Friendly": "You are warm and encouraging. You rephrase if the candidate seems stuck. Your questions are clear and supportive.",
+    "Neutral": "You are professional and objective. Standard pacing.",
+    "Tough": "You are skeptical. You challenge vague answers. You ask 'Why?' and 'Can you be more specific?' often.",
+    "Stress Test": "You are deliberately intimidating. You interrupt with harder follow-ups. You question the candidate's assumptions. You say things like 'Our last candidate answered that differently.'",
 }
 
 def verify_jwt(authorization: str = Header(None)) -> str:
@@ -81,7 +81,7 @@ class GenerateQuestionsRequest(BaseModel):
     role: str
     round: str
     first_time: bool
-    persona: str = "friendly"
+    persona: str = "Neutral"
 
 class SaveSessionRequest(BaseModel):
     session_id: str
@@ -92,6 +92,7 @@ class CreateSessionRequest(BaseModel):
     round: str
     first_time: bool
     distraction_enabled: bool
+    persona: str = "Neutral"
 
 def count_fillers(text: str) -> int:
     text_lower = text.lower()
@@ -164,120 +165,80 @@ def voice_tip(filler_count, pause_count, speech_rate, filler_breakdown=None):
     tips.sort(key=lambda x: -x[0])
     return tips[0][1]
 
-def ai_analyze_answer(question_text, transcript, filler_count, pause_count, speech_rate, filler_breakdown=None):
-    no_answer_phrases = [
-        "i don't know","i dont know","i have no idea","not sure","i'm not sure",
-        "im not sure","i cannot answer","sorry i don't","sorry i dont","no idea",
-        "i have no","i'm unsure","not really sure",
-    ]
-    transcript_lower = transcript.lower().strip()
-    is_blank = any(p in transcript_lower for p in no_answer_phrases) or len(transcript.split()) < 8
+def ai_analyze_answer(question_text, transcript, filler_count, pause_count, speech_rate, role, company, rnd, persona):
+    prompt = f"""You are evaluating a {role} candidate at {company} in a {rnd} interview.
 
-    # Determine the primary voice issue to give varied feedback
-    voice_issues = []
-    if filler_count >= 1:
-        if filler_breakdown:
-            top = sorted(filler_breakdown.items(), key=lambda x: -x[1])[:2]
-            filler_detail = ", ".join(f"'{f}' ({c}x)" for f, c in top)
-            voice_issues.append(f"filler words: {filler_detail} — total {filler_count}")
-        else:
-            voice_issues.append(f"{filler_count} filler word(s)")
-    if pause_count >= 2:
-        voice_issues.append(f"{pause_count} long pauses/gaps in speech")
-    if speech_rate < 1.8:
-        voice_issues.append(f"slow speech pace at {speech_rate:.1f} words/second")
-    elif speech_rate > 3.5:
-        voice_issues.append(f"fast speech at {speech_rate:.1f} words/second")
-    else:
-        voice_issues.append(f"good speech pace at {speech_rate:.1f} words/second")
+Question asked: "{question_text}"
+Candidate transcript: "{transcript}"
 
-    # Confidence assessment
-    confidence_note = ""
-    if speech_rate >= 1.8 and speech_rate <= 3.5 and filler_count <= 2 and pause_count <= 1:
-        confidence_note = "Your delivery showed good confidence."
-    elif speech_rate < 1.5:
-        confidence_note = "Speaking at a slightly faster pace would boost your confidence projection."
-    elif filler_count > 5:
-        confidence_note = "Reducing fillers will make you sound significantly more confident and prepared."
+Analyze strictly as a real interviewer would. Return ONLY this JSON:
+{{
+  "filler_count": {filler_count},
+  "pause_count": {pause_count},
+  "speech_rate": {speech_rate},
+  "nervousness_score": <int 0-100, higher = more nervous>,
+  "confidence_score": <int 0-100>,
+  "clarity_score": <int 0-100, how clear and structured the answer was>,
+  "relevance_score": <int 0-100, how well answer matched the question>,
+  "structure_score": <int 0-100, did they use STAR or clear framework>,
+  "advice": "<one sharp, specific, actionable tip for THIS answer>",
+  "what_worked": "<one thing they did well in this specific answer>",
+  "red_flag": "<one thing that would concern a real interviewer, or null>"
+}}
 
-    voice_summary = "; ".join(voice_issues)
+Be strict. A mediocre answer should score 55-65, not 80+.
+Penalize vague answers, lack of examples, excessive fillers.
+Reward specific metrics, structured thinking, confident delivery."""
 
-    if is_blank:
-        prompt = f"""You are a professional interview coach speaking directly to a candidate.
+    persona_style = PERSONA_STYLES.get(persona, PERSONA_STYLES["Neutral"])
 
-They were asked: "{question_text}"
-They said: "{transcript}"
-
-They struggled to answer. Help them by:
-1. Explaining what the interviewer is really looking for
-2. Giving them a complete model answer to learn from
-3. Encouraging them about their delivery
-
-IMPORTANT: Always use "you/your". Never say "the candidate". Be encouraging and specific.
-
-Respond with ONLY this JSON (no markdown, no backticks):
-{{"content_feedback": "2 sentences: explain what this question is testing and what a strong answer includes. Start with 'This question tests...'", "better_answer": "A complete confident model answer in first person (4-5 sentences). Use STAR: specific situation + action + measurable result. Make it impressive and realistic.", "voice_feedback": "One encouraging tip about your voice or confidence for next time.", "overall_tip": "The single most important thing you should do to prepare this answer before your real interview."}}"""
-    else:
-        prompt = f"""You are a professional interview coach giving detailed feedback directly to a candidate.
-
-Question: "{question_text}"
-Their answer: "{transcript}"
-Voice analysis: {voice_summary}
-{confidence_note}
-
-Give thorough, specific feedback. IMPORTANT: Always say "you/your". Never say "the candidate". Be honest but encouraging.
-
-Respond with ONLY this JSON (no markdown, no backticks):
-{{"content_feedback": "2-3 sentences: first acknowledge what was genuinely strong in your answer, then precisely identify the missing element (specific example, quantifiable result, clearer structure, or deeper insight) that would make it excellent.", "better_answer": "Rewrite your answer in first person (4-5 sentences). Keep your ideas but improve with: clear STAR structure, specific numbers or outcomes, confident language, and a strong closing. Show exactly how to say it better.", "voice_feedback": "Specific feedback on: {voice_summary}. Give one concrete technique to improve it — not generic advice.", "overall_tip": "One direct, specific sentence: the single change that will most improve your next answer."}}"""
-
-    raw = ""
-    for attempt in range(3):
-        try:
-            response = groq_client.chat.completions.create(
+    try:
+        response = groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": f"You are an expert interviewer. {persona_style} Respond with valid JSON only."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.4,
+            max_tokens=800,
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r"```json|```", "", raw).strip()
+        match = re.search(r'\{[\s\S]*\}', raw)
+        if match:
+            raw = match.group()
+        parsed = json.loads(raw)
+        
+        # Parse challenge question if needed
+        challenge = None
+        if persona in ["Tough", "Stress Test"]:
+            c_prompt = f"""The candidate just answered: "{transcript}"
+To the question: "{question_text}"
+As a {persona} interviewer at {company}, generate ONE sharp follow-up challenge or pushback question. Under 25 words. Return only the question string."""
+            c_res = groq_client.chat.completions.create(
                 model=GROQ_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are an expert interview coach. ALWAYS use 'you'/'your' when addressing the candidate. NEVER say 'the candidate'. Give specific, actionable feedback. Respond with valid JSON only — no markdown, no backticks, no text outside the JSON object."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.4,
-                max_tokens=750,
+                messages=[{"role": "user", "content": c_prompt}],
+                temperature=0.7, max_tokens=100
             )
-            raw = response.choices[0].message.content.strip()
-            raw = re.sub(r"```json|```", "", raw).strip()
-            match = re.search(r'\{[\s\S]*\}', raw)
-            if match:
-                raw = match.group()
-            parsed = json.loads(raw)
-            cf = str(parsed.get("content_feedback", "")).strip()
-            ba = str(parsed.get("better_answer", "")).strip()
-            vf = str(parsed.get("voice_feedback", "")).strip()
-            ot = str(parsed.get("overall_tip", "")).strip()
-            if cf and ba:
-                return {
-                    "content_feedback": cf,
-                    "better_answer":    ba,
-                    "voice_feedback":   vf or voice_tip(filler_count, pause_count, speech_rate, filler_breakdown),
-                    "overall_tip":      ot or voice_tip(filler_count, pause_count, speech_rate, filler_breakdown),
-                }
-        except Exception as e:
-            logger.error(f"AI analysis attempt {attempt+1} failed: {e} | raw: {raw[:200]}")
-            continue
+            challenge = c_res.choices[0].message.content.strip().replace('"', '')
 
-    # Meaningful fallback
-    vt = voice_tip(filler_count, pause_count, speech_rate, filler_breakdown)
-    if is_blank:
         return {
-            "content_feedback": "This question tests your real-world experience and problem-solving approach. Prepare a specific story using the STAR method (Situation, Task, Action, Result).",
-            "better_answer": "Structure your answer: 'In my experience, I faced [specific challenge]. I was responsible for [what needed to be done]. I approached it by [specific steps]. As a result, [measurable positive outcome].' Practice this out loud.",
-            "voice_feedback": vt,
-            "overall_tip": "Write a 2-minute story from your experience that answers this question and practice it 5 times out loud.",
+            "nervousness_score": parsed.get("nervousness_score", 50),
+            "confidence_score": parsed.get("confidence_score", 50),
+            "clarity_score": parsed.get("clarity_score", 50),
+            "relevance_score": parsed.get("relevance_score", 50),
+            "structure_score": parsed.get("structure_score", 50),
+            "advice": parsed.get("advice", "Practice your delivery."),
+            "what_worked": parsed.get("what_worked", "Good effort."),
+            "red_flag": parsed.get("red_flag", None),
+            "challenge_question": challenge
         }
-    else:
+    except Exception as e:
+        logger.error(f"AI analysis failed: {e}")
         return {
-            "content_feedback": "Your answer addressed the question well. To make it stronger, add one specific example with a measurable result that proves your point.",
-            "better_answer": "Try this structure: '[Acknowledge the situation] → [Specific action you took] → [Measurable result, e.g. improved by X%, completed in Y days] → [What you learned]'. This makes your answer concrete and memorable.",
-            "voice_feedback": vt,
-            "overall_tip": "End every answer with a specific result or outcome — it's what interviewers remember most.",
+            "nervousness_score": 50, "confidence_score": 50, "clarity_score": 50,
+            "relevance_score": 50, "structure_score": 50,
+            "advice": "Could not analyze answer.", "what_worked": "N/A", "red_flag": None, "challenge_question": None
         }
 
 @app.get("/health")
@@ -291,6 +252,7 @@ def create_session(req: CreateSessionRequest, user_id: str = Depends(verify_jwt)
             "user_id":user_id,"company":req.company,"role":req.role,
             "round":req.round,"first_time":req.first_time,
             "distraction_enabled":req.distraction_enabled,"status":"in_progress",
+            "persona":req.persona
         }).execute()
         return {"session_id":result.data[0]["id"],"session":result.data[0]}
     except Exception as e:
@@ -298,49 +260,84 @@ def create_session(req: CreateSessionRequest, user_id: str = Depends(verify_jwt)
 
 @app.post("/generate_questions")
 def generate_questions(req: GenerateQuestionsRequest, user_id: str = Depends(verify_jwt)):
-    persona_style = PERSONA_STYLES.get(req.persona, PERSONA_STYLES["friendly"])
-    experience_ctx = ("First-time candidate — include introductory questions about background and motivation."
-                      if req.first_time else "Experienced candidate — ask deeper, role-specific questions.")
-    round_guidance = {
-        "First Round": "Background, motivation, cultural fit, basic role understanding.",
-        "Technical":   "Deep technical skills, problem-solving, system design, coding concepts.",
-        "HR":          "Salary expectations, work style, team dynamics, career goals.",
-        "Final Round": "Leadership, strategic thinking, vision, company-specific scenarios.",
-        "Case Study":  "Analytical thinking, structured problem-solving, data-driven decisions.",
-    }.get(req.round, "Mix of behavioral and technical questions.")
+    persona_style = PERSONA_STYLES.get(req.persona, PERSONA_STYLES["Neutral"])
 
-    prompt = f"""{persona_style}
+    # 1. Fetch Company Context
+    context_prompt = f"""In 5 bullet points, what should a {req.role} candidate know about {req.company} before their interview? Include: known interview style, culture keywords, tech stack if relevant, a recent product or initiative, and one thing interviewers commonly assess there. Return as a JSON array of exactly 5 strings. No markdown, no explanation, only the JSON array."""
+    session_context = []
+    try:
+        ctx_res = groq_client.chat.completions.create(
+            model=GROQ_MODEL_QUALITY,
+            messages=[{"role":"user","content":context_prompt}],
+            temperature=0.5, max_tokens=400,
+        )
+        raw_ctx = re.sub(r"```json|```","",ctx_res.choices[0].message.content.strip()).strip()
+        match = re.search(r'\[[\s\S]*\]', raw_ctx)
+        if match: raw_ctx = match.group()
+        session_context = json.loads(raw_ctx)
+        supabase.table("sessions").update({"session_context": session_context}).eq("id", req.session_id).execute()
+    except Exception as e:
+        logger.error(f"Context error: {e}")
+        session_context = [f"Understand {req.company}'s core values.", f"Know the general expectations for a {req.role}.", "Be ready for behavioral questions.", "Research recent news about the company.", "Understand the industry landscape."]
 
-Interviewing at {req.company} for {req.role} ({req.round} — {round_guidance}).
-{experience_ctx}
+    # 2. Generate Questions
+    system_prompt = f"""You are a senior interviewer at {req.company}. You have deep knowledge of {req.company}'s culture, hiring bar, known interview style, tech stack (if applicable), and the specific expectations for a {req.role} in a {req.round} interview.
+{persona_style}"""
 
-Generate exactly 5 highly specific interview questions:
-1. Reference {req.company}'s actual products, industry, or known challenges
-2. Directly relevant to {req.role} day-to-day responsibilities
-3. Match real {req.round} difficulty at {req.company}
-4. Mix behavioral (STAR), situational, technical questions
-5. Realistic questions a real interviewer would ask
+    q_counts = {"First Round": 4, "Technical": 6, "HR": 5, "Final": 7, "Final Round": 7}
+    q_count = q_counts.get(req.round, 5)
 
-JSON array only: ["Q1?","Q2?","Q3?","Q4?","Q5?"]"""
+    user_prompt = f"""Generate a realistic, sequential interview for {req.role} at {req.company}, {req.round} round.
+
+QUESTION COUNT by round:
+- First Round: 4 questions
+- Technical: 6 questions
+- HR: 5 questions
+- Final: 7 questions
+
+COMPANY-AWARE RULES:
+- If company is Google: include at least one question about scale, ambiguity, or structured thinking (e.g. STAR). Reference Googleyness.
+- If company is Amazon: frame at least 2 questions around Leadership Principles. Name the LP explicitly in the question.
+- If company is a startup (any non-FAANG): focus on ownership, wearing multiple hats, and speed of execution.
+- For any company: research what they are publicly known for (product, culture, recent news) and weave it into questions naturally.
+
+ROLE-AWARE RULES:
+- SDE/Engineer: include system design or DSA-style questions in Technical round. Include at least one debugging or code-review scenario.
+- Data Scientist/Analyst: include one stats or ML concept question, one ambiguous business problem to structure, one SQL or data pipeline scenario.
+- Product Manager: include one product design question, one metrics question, one prioritization or trade-off scenario.
+- HR round (any role): purely behavioural — conflict, failure, growth, culture fit. No technical content.
+- Final round: mix of vision ("where do you see this product in 3 years"), leadership, cross-team collaboration, and one deep role-specific question.
+
+FOLLOW-UP CHAINING:
+- Q1 is always an opener for the round
+- Q2 probes something a typical candidate would mention in Q1
+- Q3 goes one level deeper or pivots to a related competency
+- Each subsequent question feels like the interviewer is actively listening and following the thread — not reading from a list
+- Never repeat themes
+
+Company context: {json.dumps(session_context)}
+
+Return ONLY a JSON array of exactly {q_count} question strings. No explanation, no numbering, no markdown fences.
+["Q1", "Q2", ...]"""
 
     try:
         response = groq_client.chat.completions.create(
             model=GROQ_MODEL_QUALITY,
             messages=[
-                {"role":"system","content":"Expert interviewer. Valid JSON array only. No markdown."},
-                {"role":"user","content":prompt}
+                {"role":"system","content":system_prompt},
+                {"role":"user","content":user_prompt}
             ],
-            temperature=0.7, max_tokens=900,
+            temperature=0.7, max_tokens=1500,
         )
         raw = re.sub(r"```json|```","",response.choices[0].message.content.strip()).strip()
         match = re.search(r'\[[\s\S]*\]', raw)
         if match:
             raw = match.group()
         questions_list = json.loads(raw)
-        if not isinstance(questions_list,list) or len(questions_list)<5:
+        if not isinstance(questions_list,list) or len(questions_list) < 2:
             raise ValueError("Invalid format")
         rows = [{"session_id":req.session_id,"question_text":q,"order_index":i}
-                for i,q in enumerate(questions_list[:5])]
+                for i,q in enumerate(questions_list[:q_count])]
         result = supabase.table("questions").insert(rows).execute()
         return {"questions":result.data}
     except Exception as e:
@@ -353,7 +350,7 @@ JSON array only: ["Q1?","Q2?","Q3?","Q4?","Q5?"]"""
             "Tell me about a time you had to learn something quickly under pressure.",
         ]
         rows = [{"session_id":req.session_id,"question_text":q,"order_index":i}
-                for i,q in enumerate(fallback)]
+                for i,q in enumerate(fallback[:q_count])]
         result = supabase.table("questions").insert(rows).execute()
         return {"questions":result.data}
 
@@ -363,6 +360,7 @@ async def analyze_answer(
     question_id:   str             = Form(...),
     question_text: str             = Form(""),
     recovery_time: Optional[float] = Form(None),
+    hint_used:     bool            = Form(False),
     audio:         UploadFile      = File(...),
     user_id:       str             = Depends(verify_jwt),
 ):
@@ -393,29 +391,47 @@ async def analyze_answer(
         filler_breakdown = get_filler_breakdown(transcript)
         pause_count      = count_long_pauses(tmp_path)
         speech_rate      = round(word_count / max(duration, 1.0), 2)
-        nervousness      = compute_nervousness(filler_count, pause_count, speech_rate, recovery_time)
+        session_data = supabase.table("sessions").select("role,company,round,persona").eq("id",session_id).single().execute().data
+        role = session_data["role"]
+        company = session_data["company"]
+        rnd = session_data["round"]
+        persona = session_data.get("persona", "Neutral")
+
         ai_feedback      = ai_analyze_answer(
             question_text or "Interview question",
-            transcript, filler_count, pause_count, speech_rate, filler_breakdown
+            transcript, filler_count, pause_count, speech_rate, role, company, rnd, persona
         )
-        tip = ai_feedback["overall_tip"] or voice_tip(filler_count, pause_count, speech_rate, filler_breakdown)
+        tip = ai_feedback["advice"]
 
         result = supabase.table("answers").insert({
             "session_id":session_id,"question_id":question_id,
             "transcript":transcript,"filler_count":filler_count,
             "pause_count":pause_count,"speech_rate":speech_rate,
-            "nervousness_score":nervousness,"improvement_tip":tip,
+            "nervousness_score":ai_feedback["nervousness_score"],
+            "confidence_score":ai_feedback["confidence_score"],
+            "clarity_score":ai_feedback["clarity_score"],
+            "relevance_score":ai_feedback["relevance_score"],
+            "structure_score":ai_feedback["structure_score"],
+            "improvement_tip":tip,
+            "what_worked":ai_feedback["what_worked"],
+            "red_flag":ai_feedback["red_flag"],
+            "challenge_question":ai_feedback["challenge_question"],
             "recovery_time":recovery_time,
+            "hint_used":hint_used,
         }).execute()
 
         return {
             "answer_id":result.data[0]["id"],"transcript":transcript,
             "filler_count":filler_count,"pause_count":pause_count,
-            "speech_rate":speech_rate,"nervousness_score":nervousness,
+            "speech_rate":speech_rate,"nervousness_score":ai_feedback["nervousness_score"],
+            "confidence_score":ai_feedback["confidence_score"],
+            "clarity_score":ai_feedback["clarity_score"],
+            "relevance_score":ai_feedback["relevance_score"],
+            "structure_score":ai_feedback["structure_score"],
             "improvement_tip":tip,"duration":round(duration,1),
-            "content_feedback":ai_feedback["content_feedback"],
-            "better_answer":ai_feedback["better_answer"],
-            "voice_feedback":ai_feedback["voice_feedback"],
+            "what_worked":ai_feedback["what_worked"],
+            "red_flag":ai_feedback["red_flag"],
+            "challenge_question":ai_feedback["challenge_question"],
             "no_speech":False,
         }
     finally:
@@ -454,40 +470,108 @@ def save_session(req: SaveSessionRequest, user_id: str = Depends(verify_jwt)):
 def generate_improvement_plan(req: dict, user_id: str = Depends(verify_jwt)):
     session_id = req.get("session_id")
     try:
+        session_data = supabase.table("sessions").select("role,company,round,session_context").eq("id",session_id).single().execute().data
+        
+        questions = supabase.table("questions").select("id,question_text").eq("session_id",session_id).order("order_index").execute().data
         answers = supabase.table("answers").select(
-            "filler_count,pause_count,speech_rate,nervousness_score,improvement_tip"
-        ).eq("session_id",session_id).execute()
-        data = answers.data
-        if not data: return {"plan":"No answers found for this session."}
-        avg_fillers = sum(a["filler_count"] or 0 for a in data)/len(data)
-        avg_pauses  = sum(a["pause_count"]  or 0 for a in data)/len(data)
-        avg_rate    = sum(a["speech_rate"]   or 0 for a in data)/len(data)
-        avg_score   = sum(a["nervousness_score"] or 0 for a in data)/len(data)
+            "question_id,nervousness_score,confidence_score,clarity_score,relevance_score,structure_score,improvement_tip,red_flag"
+        ).eq("session_id",session_id).execute().data
+        
+        if not answers: return {"plan": "No answers found for this session."}
+        
+        q_json = json.dumps([q["question_text"] for q in questions])
+        scores_json = json.dumps([{
+            "question_id": a["question_id"],
+            "nervousness": a["nervousness_score"],
+            "confidence": a["confidence_score"],
+            "clarity": a["clarity_score"],
+            "relevance": a["relevance_score"],
+            "structure": a["structure_score"]
+        } for a in answers])
+        advice_json = json.dumps([{ "question_id": a["question_id"], "advice": a["improvement_tip"] } for a in answers])
+        flags_json = json.dumps([{ "question_id": a["question_id"], "red_flag": a["red_flag"] } for a in answers if a["red_flag"]])
+        
+        prompt = f"""You just finished evaluating a complete {session_data['round']} interview for {session_data['role']} at {session_data['company']}.
 
-        # Determine strengths
-        strengths = []
-        if avg_fillers < 2: strengths.append("low filler word usage")
-        if avg_pauses < 1:  strengths.append("smooth speech flow with minimal pauses")
-        if 1.8 <= avg_rate <= 3.2: strengths.append(f"excellent speech pace at {avg_rate:.1f} w/s")
-        if avg_score < 35:  strengths.append("calm and confident overall delivery")
-        strength_text = " and ".join(strengths) if strengths else "your willingness to practice and improve"
+Here is the full session data:
+Questions: {q_json}
+Per-question scores: {scores_json}
+Per-question advice: {advice_json}
+Red flags: {flags_json}
 
-        prompt = f"""You are a professional interview coach writing directly to a candidate. Always use "you/your".
+Generate a personalized improvement plan. Return ONLY this JSON:
+{{
+  "overall_verdict": "<2 sentences: honest overall assessment of readiness for THIS role at THIS company>",
+  "top_strengths": ["<strength 1>", "<strength 2>"],
+  "critical_gaps": ["<gap 1>", "<gap 2>", "<gap 3>"],
+  "weekly_plan": [
+    {{
+      "week": 1,
+      "focus": "<skill/area>",
+      "action": "<specific daily practice, under 20 words>"
+    }},
+    {{
+      "week": 2,
+      "focus": "<skill/area>",
+      "action": "<specific daily practice>"
+    }},
+    {{
+      "week": 3,
+      "focus": "<skill/area>",
+      "action": "<specific daily practice>"
+    }}
+  ],
+  "company_specific_tip": "<one tip specifically about how {session_data['company']} evaluates candidates that this person should know>"
+}}"""
 
-Their session data:
-- Avg filler words per answer: {avg_fillers:.1f}
-- Avg long pauses per answer: {avg_pauses:.1f}
-- Avg speech rate: {avg_rate:.1f} words/second (ideal: 2.0-3.0)
-- Nervousness score: {avg_score:.1f}/100 (lower is better)
-- Strengths identified: {strength_text}
+        response = groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.5, max_tokens=1000,
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r"```json|```", "", raw).strip()
+        match = re.search(r'\{[\s\S]*\}', raw)
+        if match: raw = match.group()
+        parsed = json.loads(raw)
+        
+        # Save to DB
+        supabase.table("sessions").update({
+            "overall_verdict": parsed.get("overall_verdict"),
+            "weekly_plan": parsed.get("weekly_plan"),
+            "company_specific_tip": parsed.get("company_specific_tip")
+        }).eq("id", session_id).execute()
+        
+        return parsed
+    except Exception as e:
+        logger.error(f"improvement plan error: {e}")
+        return {"overall_verdict":"Keep practicing! Focus on reducing fillers."}
 
-Write a structured improvement plan with these 4 parts:
-1. **What You Did Well**: Acknowledge their genuine strength ({strength_text}) — make them feel confident.
-2. **Your Key Weakness**: The single most impactful area to improve based on the data.
-3. **Your Daily Drill**: One specific, actionable 5-minute daily exercise to fix the weakness.
-4. **Your Next Target**: One measurable goal for the next practice session.
+@app.post("/generate_hint")
+def generate_hint(req: dict, user_id: str = Depends(verify_jwt)):
+    session_id = req.get("session_id")
+    question_text = req.get("question_text")
+    try:
+        session_data = supabase.table("sessions").select("role,company,round").eq("id",session_id).single().execute().data
+        
+        prompt = f"""The candidate is stuck on this interview question:
+"{question_text}"
+Role: {session_data['role']}, Company: {session_data['company']}, Round: {session_data['round']}
 
-Be encouraging, specific, and talk directly to them. Under 200 words."""
+Give a helpful hint that guides their thinking WITHOUT giving away the answer. Include:
+1. What framework or structure to use (e.g. STAR, CIRCLES, first-principles)
+2. One specific angle from their role/company context to consider
+3. One thing to avoid
+
+Return as plain text, conversational, under 60 words."""
+        
+        response = groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.7, max_tokens=150,
+        )
+        hint = response.choices[0].message.content.strip()
+        return {"hint": hint}
 
         response = groq_client.chat.completions.create(
             model=GROQ_MODEL,

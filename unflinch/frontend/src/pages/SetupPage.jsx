@@ -4,6 +4,7 @@ import { NavBar, Toggle, Spinner, Toast } from '../components/UI'
 import { Briefcase, Zap } from 'lucide-react'
 
 const ROUNDS = ['First Round', 'Technical', 'HR', 'Final Round', 'Case Study']
+const PERSONAS = ['Friendly', 'Neutral', 'Tough', 'Stress Test']
 
 export default function SetupPage({ navigate, onSignOut, user }) {
   const [form, setForm]       = useState({
@@ -12,6 +13,7 @@ export default function SetupPage({ navigate, onSignOut, user }) {
     round: ROUNDS[0],
     first_time: false,
     distraction_enabled: false,
+    persona: PERSONAS[1],
   })
   const [loading, setLoading] = useState(false)
   const [toast, setToast]     = useState(null)
@@ -32,6 +34,7 @@ export default function SetupPage({ navigate, onSignOut, user }) {
         round: form.round,
         first_time: form.first_time,
         distraction_enabled: form.distraction_enabled,
+        persona: form.persona,
       })
 
       // 2. Generate questions
@@ -41,6 +44,7 @@ export default function SetupPage({ navigate, onSignOut, user }) {
         role: form.role,
         round: form.round,
         first_time: form.first_time,
+        persona: form.persona,
       })
 
       // 3. Navigate to interview
@@ -96,6 +100,17 @@ export default function SetupPage({ navigate, onSignOut, user }) {
                 onChange={e => set('round', e.target.value)}
               >
                 {ROUNDS.map(r => <option key={r}>{r}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label className="label">Interviewer Persona</label>
+              <select
+                className="input appearance-none"
+                value={form.persona}
+                onChange={e => set('persona', e.target.value)}
+              >
+                {PERSONAS.map(p => <option key={p}>{p}</option>)}
               </select>
             </div>
 

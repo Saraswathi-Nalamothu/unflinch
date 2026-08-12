@@ -51,4 +51,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ session_id: sessionId }),
     }),
+  generateHint: (body) =>
+    apiFetch('/generate_hint', { method: 'POST', body: JSON.stringify(body) }),
 }
