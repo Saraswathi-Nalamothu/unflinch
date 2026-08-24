@@ -35,7 +35,7 @@ app = FastAPI(title="Unflinch API", version="3.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://unflinch.vercel.app", "http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -280,45 +280,27 @@ def generate_questions(req: GenerateQuestionsRequest, user_id: str = Depends(ver
         logger.error(f"Context error: {e}")
         session_context = [f"Understand {req.company}'s core values.", f"Know the general expectations for a {req.role}.", "Be ready for behavioral questions.", "Research recent news about the company.", "Understand the industry landscape."]
 
-    # 2. Generate Questions
+    # 2. Generate First Question Only
     system_prompt = f"""You are a senior interviewer at {req.company}. You have deep knowledge of {req.company}'s culture, hiring bar, known interview style, tech stack (if applicable), and the specific expectations for a {req.role} in a {req.round} interview.
 {persona_style}"""
 
-    q_counts = {"First Round": 4, "Technical": 6, "HR": 5, "Final": 7, "Final Round": 7}
+    q_counts = {"First Round": 4, "Technical": 6, "HR": 5, "Final": 7, "Final Round": 7, "Case Study": 3}
     q_count = q_counts.get(req.round, 5)
 
-    user_prompt = f"""Generate a realistic, sequential interview for {req.role} at {req.company}, {req.round} round.
-
-QUESTION COUNT by round:
-- First Round: 4 questions
-- Technical: 6 questions
-- HR: 5 questions
-- Final: 7 questions
+    user_prompt = f"""Generate the VERY FIRST question for a realistic, sequential interview for {req.role} at {req.company}, {req.round} round.
 
 COMPANY-AWARE RULES:
-- If company is Google: include at least one question about scale, ambiguity, or structured thinking (e.g. STAR). Reference Googleyness.
-- If company is Amazon: frame at least 2 questions around Leadership Principles. Name the LP explicitly in the question.
-- If company is a startup (any non-FAANG): focus on ownership, wearing multiple hats, and speed of execution.
-- For any company: research what they are publicly known for (product, culture, recent news) and weave it into questions naturally.
+- If company is Google: reference Googleyness or scale.
+- If company is Amazon: reference a Leadership Principle.
+- If company is a startup: focus on ownership and execution.
+- For any company: research what they are publicly known for and weave it in naturally.
 
-ROLE-AWARE RULES:
-- SDE/Engineer: include system design or DSA-style questions in Technical round. Include at least one debugging or code-review scenario.
-- Data Scientist/Analyst: include one stats or ML concept question, one ambiguous business problem to structure, one SQL or data pipeline scenario.
-- Product Manager: include one product design question, one metrics question, one prioritization or trade-off scenario.
-- HR round (any role): purely behavioural — conflict, failure, growth, culture fit. No technical content.
-- Final round: mix of vision ("where do you see this product in 3 years"), leadership, cross-team collaboration, and one deep role-specific question.
-
-FOLLOW-UP CHAINING:
-- Q1 is always an opener for the round
-- Q2 probes something a typical candidate would mention in Q1
-- Q3 goes one level deeper or pivots to a related competency
-- Each subsequent question feels like the interviewer is actively listening and following the thread — not reading from a list
-- Never repeat themes
+CRITICAL RULE: DO NOT assume the candidate has worked at {req.company} before. Ask about their past experience that prepares them for this role at {req.company}. For example, instead of "tell me about your time at {req.company}", ask "tell me about a time in your previous roles that prepared you for {req.company}".
 
 Company context: {json.dumps(session_context)}
 
-Return ONLY a JSON array of exactly {q_count} question strings. No explanation, no numbering, no markdown fences.
-["Q1", "Q2", ...]"""
+Return ONLY a JSON array containing exactly ONE question string. No explanation, no numbering, no markdown fences.
+["Question string here"]"""
 
     try:
         response = groq_client.chat.completions.create(
@@ -327,32 +309,24 @@ Return ONLY a JSON array of exactly {q_count} question strings. No explanation, 
                 {"role":"system","content":system_prompt},
                 {"role":"user","content":user_prompt}
             ],
-            temperature=0.7, max_tokens=1500,
+            temperature=0.7, max_tokens=200,
         )
         raw = re.sub(r"```json|```","",response.choices[0].message.content.strip()).strip()
         match = re.search(r'\[[\s\S]*\]', raw)
         if match:
             raw = match.group()
         questions_list = json.loads(raw)
-        if not isinstance(questions_list,list) or len(questions_list) < 2:
+        if not isinstance(questions_list,list) or len(questions_list) < 1:
             raise ValueError("Invalid format")
-        rows = [{"session_id":req.session_id,"question_text":q,"order_index":i}
-                for i,q in enumerate(questions_list[:q_count])]
-        result = supabase.table("questions").insert(rows).execute()
-        return {"questions":result.data}
+        
+        q_text = questions_list[0]
     except Exception as e:
         logger.error(f"generate_questions error: {e}")
-        fallback = [
-            f"Tell me about your most relevant experience for the {req.role} role at {req.company}.",
-            f"How do you stay updated with developments relevant to {req.company}'s work?",
-            "Describe a challenging project you led. What was your approach and outcome?",
-            f"Why {req.company} specifically, and how does this {req.role} role fit your goals?",
-            "Tell me about a time you had to learn something quickly under pressure.",
-        ]
-        rows = [{"session_id":req.session_id,"question_text":q,"order_index":i}
-                for i,q in enumerate(fallback[:q_count])]
-        result = supabase.table("questions").insert(rows).execute()
-        return {"questions":result.data}
+        q_text = f"Tell me about a relevant experience in your past roles that prepares you for the {req.role} role at {req.company}."
+
+    rows = [{"session_id": req.session_id, "question_text": q_text, "order_index": 0}]
+    result = supabase.table("questions").insert(rows).execute()
+    return {"questions": result.data, "target_questions": q_count}
 
 @app.post("/analyze_answer")
 async def analyze_answer(
@@ -420,6 +394,52 @@ async def analyze_answer(
             "hint_used":hint_used,
         }).execute()
 
+        # Generate next question if not at the end
+        q_counts = {"First Round": 4, "Technical": 6, "HR": 5, "Final": 7, "Final Round": 7, "Case Study": 3}
+        q_count = q_counts.get(rnd, 5)
+        
+        current_qs = supabase.table("questions").select("id").eq("session_id", session_id).execute().data
+        next_q_data = None
+        
+        if len(current_qs) < q_count:
+            # Generate next question dynamically
+            persona_style = PERSONA_STYLES.get(persona, PERSONA_STYLES["Neutral"])
+            context = session_data.get("session_context", [])
+            
+            prompt = f"""You are a senior {persona} interviewer at {company} conducting a {rnd} interview for a {role} candidate.
+The candidate was just asked: "{question_text}"
+The candidate answered: "{transcript}"
+
+Generate ONE realistic, conversational follow-up question based on their answer.
+If they mentioned a specific project, metric, or challenge, ask about it.
+If they were vague, ask for an example.
+If this is the end of a topic, pivot to the next relevant area for a {role}.
+Do NOT say 'Good answer' or 'Thank you', just ask the question directly as if in a real conversation.
+{persona_style}
+
+Company context: {json.dumps(context)}
+
+Return ONLY the question string, nothing else."""
+
+            try:
+                nxt_res = groq_client.chat.completions.create(
+                    model=GROQ_MODEL_QUALITY,
+                    messages=[{"role":"user","content":prompt}],
+                    temperature=0.7, max_tokens=150
+                )
+                next_q_text = nxt_res.choices[0].message.content.strip().replace('"', '')
+                
+                rows = [{"session_id": session_id, "question_text": next_q_text, "order_index": len(current_qs)}]
+                q_result = supabase.table("questions").insert(rows).execute()
+                next_q_data = q_result.data[0] if q_result.data else None
+            except Exception as e:
+                logger.error(f"Follow-up gen error: {e}")
+                # Fallback to a generic follow-up
+                next_q_text = f"Can you elaborate a bit more on that, keeping the {role} context in mind?"
+                rows = [{"session_id": session_id, "question_text": next_q_text, "order_index": len(current_qs)}]
+                q_result = supabase.table("questions").insert(rows).execute()
+                next_q_data = q_result.data[0] if q_result.data else None
+
         return {
             "answer_id":result.data[0]["id"],"transcript":transcript,
             "filler_count":filler_count,"pause_count":pause_count,
@@ -433,6 +453,7 @@ async def analyze_answer(
             "red_flag":ai_feedback["red_flag"],
             "challenge_question":ai_feedback["challenge_question"],
             "no_speech":False,
+            "next_question": next_q_data,
         }
     finally:
         os.unlink(tmp_path)
@@ -443,7 +464,11 @@ def get_session(session_id: str, user_id: str = Depends(verify_jwt)):
         session   = supabase.table("sessions").select("*").eq("id",session_id).single().execute()
         questions = supabase.table("questions").select("*").eq("session_id",session_id).order("order_index").execute()
         answers   = supabase.table("answers").select("*").eq("session_id",session_id).execute()
-        return {"session":session.data,"questions":questions.data,"answers":answers.data}
+        
+        q_counts = {"First Round": 4, "Technical": 6, "HR": 5, "Final": 7, "Final Round": 7, "Case Study": 3}
+        target_questions = q_counts.get(session.data["round"], 5) if session.data else 5
+        
+        return {"session":session.data,"questions":questions.data,"answers":answers.data,"target_questions":target_questions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

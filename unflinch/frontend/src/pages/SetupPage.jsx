@@ -5,11 +5,18 @@ import { Briefcase, Zap } from 'lucide-react'
 
 const ROUNDS = ['First Round', 'Technical', 'HR', 'Final Round', 'Case Study']
 const PERSONAS = ['Friendly', 'Neutral', 'Tough', 'Stress Test']
+const ROLES = [
+  'Software Engineer', 'Frontend Engineer', 'Backend Engineer', 'Full Stack Engineer', 
+  'Product Manager', 'Data Scientist', 'Data Analyst', 'Machine Learning Engineer',
+  'UI/UX Designer', 'Product Designer', 'Marketing Manager', 'Sales Representative', 
+  'Account Executive', 'Human Resources', 'Operations Manager', 'Project Manager',
+  'Business Analyst', 'Financial Analyst', 'Consultant', 'Customer Success Manager'
+]
 
 export default function SetupPage({ navigate, onSignOut, user }) {
   const [form, setForm]       = useState({
     company: '',
-    role: '',
+    role: ROLES[0],
     round: ROUNDS[0],
     first_time: false,
     distraction_enabled: false,
@@ -83,13 +90,13 @@ export default function SetupPage({ navigate, onSignOut, user }) {
 
             <div>
               <label className="label">Role / Position</label>
-              <input
-                className="input"
-                placeholder="e.g. Software Engineer, Product Manager"
+              <select
+                className="input appearance-none"
                 value={form.role}
                 onChange={e => set('role', e.target.value)}
-                required
-              />
+              >
+                {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
             </div>
 
             <div>

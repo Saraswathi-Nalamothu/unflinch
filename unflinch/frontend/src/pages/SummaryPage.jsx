@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { api } from '../lib/api'
 import { NavBar, ScoreRing, Spinner, Toast } from '../components/UI'
-import { Download, LayoutDashboard, Sparkles, Trophy, AlertCircle, Info, Target, Calendar, CheckCircle2 } from 'lucide-react'
+import { Download, LayoutDashboard, Sparkles, Trophy, AlertCircle, Info, Target, Calendar, CheckCircle2, RotateCcw } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 
 // ── Confetti (same as dashboard) ─────────────────────────────
@@ -97,6 +97,7 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
   const [confetti, setConfetti]   = useState(false)
   const [expandBest, setExpandBest]   = useState(false)
   const [expandWorst, setExpandWorst] = useState(false)
+  const [restarting, setRestarting]   = useState(false)
 
   useEffect(() => {
     if (!sessionId) return navigate('dashboard')
@@ -127,6 +128,33 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
       setToast({ message: 'Session saved!', type: 'success' })
     } catch (err) {
       setToast({ message: err.message, type: 'error' })
+    }
+  }
+
+  async function handleRestart() {
+    if (!session) return
+    setRestarting(true)
+    try {
+      const { session_id } = await api.createSession({
+        company: session.company,
+        role: session.role,
+        round: session.round,
+        first_time: session.first_time || false,
+        distraction_enabled: session.distraction_enabled || false,
+        persona: session.persona || 'Neutral',
+      })
+      await api.generateQuestions({
+        session_id,
+        company: session.company,
+        role: session.role,
+        round: session.round,
+        first_time: session.first_time || false,
+        persona: session.persona || 'Neutral',
+      })
+      navigate('interview', { sessionId: session_id, distractionEnabled: session.distraction_enabled })
+    } catch (err) {
+      setToast({ message: err.message, type: 'error' })
+      setRestarting(false)
     }
   }
 
@@ -402,6 +430,14 @@ export default function SummaryPage({ navigate, onSignOut, user, params }) {
                 Save Session
               </button>
             )}
+            <button
+              className="btn-secondary flex items-center justify-center gap-2"
+              onClick={handleRestart}
+              disabled={restarting}
+            >
+              {restarting ? <Spinner className="w-4 h-4" /> : <RotateCcw size={16} />} 
+              {restarting ? 'Starting...' : 'Restart Interview'}
+            </button>
             <button
               className="btn-secondary flex items-center justify-center gap-2"
               onClick={() => generatePDF(session, questions, answers, plan)}

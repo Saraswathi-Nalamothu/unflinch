@@ -66,26 +66,13 @@ function AnimatedNumber({ value, decimals = 0, duration = 1000 }) {
 
 // ── Company logo ──────────────────────────────────────────────
 function CompanyLogo({ company, size = 40 }) {
-  const [failed, setFailed] = useState(false)
-  const slug = company?.toLowerCase().replace(/[^a-z0-9]/g, '') || ''
-  if (failed || !slug) {
-    return (
-      <div
-        className="rounded-lg bg-steel flex items-center justify-center text-chalk font-display font-bold shrink-0"
-        style={{ width: size, height: size, fontSize: size * 0.4 }}
-      >
-        {company?.[0]?.toUpperCase() || '?'}
-      </div>
-    )
-  }
   return (
-    <img
-      src={`https://logo.clearbit.com/${slug}.com`}
-      alt={company}
-      className="rounded-lg object-contain bg-white shrink-0"
-      style={{ width: size, height: size }}
-      onError={() => setFailed(true)}
-    />
+    <div
+      className="rounded-lg bg-steel flex items-center justify-center text-chalk font-display font-bold shrink-0"
+      style={{ width: size, height: size, fontSize: size * 0.4 }}
+    >
+      {company?.[0]?.toUpperCase() || '?'}
+    </div>
   )
 }
 
@@ -251,7 +238,13 @@ export default function DashboardPage({ navigate, onSignOut, user }) {
                     className="card cursor-pointer hover:border-ember/40 transition-all duration-200
                                flex items-center gap-4 animate-fade-in group"
                     style={{ animationDelay: `${i * 60}ms` }}
-                    onClick={() => navigate('summary', { sessionId: s.id, readOnly: true })}
+                    onClick={() => {
+                      if (s.status === 'in_progress') {
+                        navigate('interview', { sessionId: s.id })
+                      } else {
+                        navigate('summary', { sessionId: s.id, readOnly: true })
+                      }
+                    }}
                   >
                     <CompanyLogo company={s.company} size={40} />
 

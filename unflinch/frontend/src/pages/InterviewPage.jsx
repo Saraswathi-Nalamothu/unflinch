@@ -204,6 +204,7 @@ export default function InterviewPage({ navigate, onSignOut, user, params }) {
 
   const [questions, setQuestions]         = useState([])
   const [currentIdx, setCurrentIdx]       = useState(0)
+  const [targetQuestions, setTargetQuestions] = useState(5)
   const [analysing, setAnalysing]         = useState(false)
   const [showDistraction, setDistraction] = useState(false)
   const [distractionUsed, setUsed]        = useState(false)
@@ -223,7 +224,16 @@ export default function InterviewPage({ navigate, onSignOut, user, params }) {
   useEffect(() => {
     if (!sessionId) return navigate('dashboard')
     api.getSession(sessionId)
-      .then(d => setQuestions(d.questions || []))
+      .then(d => {
+        setQuestions(d.questions || [])
+        setTargetQuestions(d.target_questions || d.questions?.length || 5)
+        
+        // Find resume point
+        const answeredIds = (d.answers || []).map(a => a.question_id)
+        let idx = (d.questions || []).findIndex(q => !answeredIds.includes(q.id))
+        if (idx === -1) idx = d.questions?.length ? d.questions.length - 1 : 0
+        setCurrentIdx(Math.max(0, idx))
+      })
       .catch(err => setToast({ message: err.message, type: 'error' }))
       .finally(() => setLoading(false))
   }, [sessionId])
@@ -279,6 +289,13 @@ export default function InterviewPage({ navigate, onSignOut, user, params }) {
         return
       }
 
+      if (res.next_question) {
+        setQuestions(prev => {
+          if (prev.find(q => q.id === res.next_question.id)) return prev
+          return [...prev, res.next_question]
+        })
+      }
+
       setResult(res)
     } catch (err) {
       setToast({ message: 'Analysis failed: ' + err.message, type: 'error' })
@@ -292,7 +309,7 @@ export default function InterviewPage({ navigate, onSignOut, user, params }) {
   }, [audioBlob])
 
   function handleNext() {
-    if (currentIdx < questions.length - 1) {
+    if (currentIdx < targetQuestions - 1) {
       setCurrentIdx(i => i + 1)
       setResult(null)
       setNoSpeech(false)
@@ -317,7 +334,7 @@ export default function InterviewPage({ navigate, onSignOut, user, params }) {
   )
 
   const question = questions[currentIdx]
-  const isLast   = currentIdx === questions.length - 1
+  const isLast   = currentIdx >= targetQuestions - 1
 
   async function fetchHint() {
     if (hintText || hintLoading) return
@@ -347,7 +364,7 @@ export default function InterviewPage({ navigate, onSignOut, user, params }) {
 
           {/* Progress + exit */}
           <div className="flex items-center gap-3 mb-2">
-            <div className="flex-1"><ProgressBar current={currentIdx} total={questions.length} /></div>
+            <div className="flex-1"><ProgressBar current={currentIdx} total={targetQuestions} /></div>
             <button
               className="shrink-0 flex items-center gap-1.5 text-mist text-xs hover:text-ember
                 transition-colors border border-steel hover:border-ember/40 rounded-lg px-3 py-1.5 mb-2"
@@ -359,7 +376,7 @@ export default function InterviewPage({ navigate, onSignOut, user, params }) {
 
           <div className="flex items-center justify-between mb-4">
             <span className="text-mist text-xs font-mono uppercase tracking-widest">
-              Question {currentIdx + 1} of {questions.length}
+              Question {currentIdx + 1} of {targetQuestions}
             </span>
             {distractionEnabled && (
               <span className="text-amber text-xs font-mono border border-amber/30 rounded-full px-3 py-1">
